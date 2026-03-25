@@ -5,15 +5,12 @@ import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from backend.pipeline.parser import parse_file
+from backend.pipeline.ai_extractor import extract_items
 
-# Папка для временного хранения загруженных файлов
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
-
-# Максимальное количество файлов за один запрос
 MAX_FILES = 15
 
-# Создаём экземпляр FastAPI приложения
 app = FastAPI(
     title="Financial Document Analyzer",
     description="Система анализа финансовых документов",
@@ -50,14 +47,20 @@ def upload_files(files: list[UploadFile] = File(...)):
         with save_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Сразу парсим файл после сохранения
+        # Парсим файл
         parsed = parse_file(save_path)
+
+        # Извлекаем позиции через AI
+        ai_items = []
+        if parsed["success"] and parsed["text"]:
+            ai_items = extract_items(parsed["text"])
 
         saved_files.append({
             "original_name": file.filename,
             "saved_as": unique_name,
             "size_bytes": save_path.stat().st_size,
-            "parsed": parsed
+            "parsed": parsed,
+            "items": ai_items
         })
 
     return {
