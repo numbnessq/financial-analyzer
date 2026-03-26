@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from backend.pipeline.parser import parse_file
 from backend.pipeline.ai_extractor import extract_items
+from backend.models.schemas import Item, DocumentResult, UploadResponse
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
