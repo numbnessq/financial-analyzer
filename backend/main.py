@@ -7,6 +7,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from backend.pipeline.parser import parse_file
 from backend.pipeline.ai_extractor import extract_items
 from backend.models.schemas import Item, DocumentResult, UploadResponse
+from backend.pipeline.normalizer import normalize_items
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -55,6 +56,7 @@ def upload_files(files: list[UploadFile] = File(...)):
         ai_items = []
         if parsed["success"] and parsed["text"]:
             ai_items = extract_items(parsed["text"])
+            ai_items = normalize_items(ai_items, source=file.filename)
 
         saved_files.append({
             "original_name": file.filename,
