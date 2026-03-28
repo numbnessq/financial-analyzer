@@ -15,6 +15,7 @@ class Item(BaseModel):
     unit: str = ""                   # единица измерения (шт, кг, м2...)
     price: float = 0.0               # цена за единицу
     source: str = ""                 # из какого файла взята позиция
+    department: str = "Не определён"
 
     @field_validator("name")
     @classmethod

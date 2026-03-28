@@ -8,6 +8,7 @@ from backend.pipeline.parser import parse_file
 from backend.pipeline.ai_extractor import extract_items
 from backend.models.schemas import Item, DocumentResult, UploadResponse
 from backend.pipeline.normalizer import normalize_items
+from backend.pipeline.source_mapper import attach_source
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -57,6 +58,7 @@ def upload_files(files: list[UploadFile] = File(...)):
         if parsed["success"] and parsed["text"]:
             ai_items = extract_items(parsed["text"])
             ai_items = normalize_items(ai_items, source=file.filename)
+            ai_items = attach_source(ai_items, unique_name)
 
         saved_files.append({
             "original_name": file.filename,
