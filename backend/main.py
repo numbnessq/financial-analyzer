@@ -9,6 +9,7 @@ from backend.pipeline.ai_extractor import extract_items
 from backend.models.schemas import Item, DocumentResult, UploadResponse
 from backend.pipeline.normalizer import normalize_items
 from backend.pipeline.source_mapper import attach_source
+from backend.pipeline.matcher import match_across_documents
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -68,7 +69,17 @@ def upload_files(files: list[UploadFile] = File(...)):
             "items": ai_items
         })
 
+    # Собираем все документы для сопоставления
+    documents = [
+        {"filename": f["original_name"], "items": f["items"]}
+        for f in saved_files
+    ]
+
+    # Группируем похожие позиции между документами
+    matched_groups = match_across_documents(documents)
+
     return {
         "uploaded": len(saved_files),
-        "files": saved_files
+        "files": saved_files,
+        "matched_groups": matched_groups
     }
