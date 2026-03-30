@@ -4,7 +4,7 @@ from rapidfuzz import fuzz, process
 
 # Порог схожести — если больше этого числа, считаем позиции одинаковыми
 # 85 — хороший баланс между точностью и гибкостью
-SIMILARITY_THRESHOLD = 85
+SIMILARITY_THRESHOLD = 70
 
 
 def find_best_match(name: str, candidates: list[str]) -> tuple[str, float] | None:

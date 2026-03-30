@@ -14,6 +14,7 @@ from backend.pipeline.analyzer import analyze_all_groups
 from backend.pipeline.scorer import score_all, ItemStats
 from backend.pipeline.explainer import explain_all
 from backend.pipeline.graph_builder import build_graph, export_json, PurchaseRecord
+from fastapi.middleware.cors import CORSMiddleware
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -23,6 +24,13 @@ app = FastAPI(
     title="Financial Document Analyzer",
     description="Система анализа финансовых документов",
     version="0.1.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ─────────────────────────────────────────────
