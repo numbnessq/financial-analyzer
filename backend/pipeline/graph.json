@@ -1,0 +1,206 @@
+{
+  "nodes": [
+    {
+      "id": "dept::Отдел строительства",
+      "label": "Отдел строительства",
+      "type": "department",
+      "color": "#2196f3",
+      "risk_score": null,
+      "risk_level": null
+    },
+    {
+      "id": "cont::ООО СтройСнаб",
+      "label": "ООО СтройСнаб",
+      "type": "contractor",
+      "color": "#009688",
+      "risk_score": null,
+      "risk_level": null
+    },
+    {
+      "id": "item::бетон М300",
+      "label": "бетон М300",
+      "type": "item",
+      "color": "#ff9800",
+      "risk_score": 30,
+      "risk_level": "MEDIUM"
+    },
+    {
+      "id": "item::арматура А500С",
+      "label": "арматура А500С",
+      "type": "item",
+      "color": "#ff9800",
+      "risk_score": 35,
+      "risk_level": "MEDIUM"
+    },
+    {
+      "id": "cont::ИП Иванов",
+      "label": "ИП Иванов",
+      "type": "contractor",
+      "color": "#009688",
+      "risk_score": null,
+      "risk_level": null
+    },
+    {
+      "id": "dept::Отдел ремонта",
+      "label": "Отдел ремонта",
+      "type": "department",
+      "color": "#2196f3",
+      "risk_score": null,
+      "risk_level": null
+    },
+    {
+      "id": "cont::ООО РемСервис",
+      "label": "ООО РемСервис",
+      "type": "contractor",
+      "color": "#009688",
+      "risk_score": null,
+      "risk_level": null
+    },
+    {
+      "id": "item::кирпич облицовочный",
+      "label": "кирпич облицовочный",
+      "type": "item",
+      "color": "#4caf50",
+      "risk_score": 0,
+      "risk_level": "LOW"
+    },
+    {
+      "id": "dept::Отдел логистики",
+      "label": "Отдел логистики",
+      "type": "department",
+      "color": "#2196f3",
+      "risk_score": null,
+      "risk_level": null
+    },
+    {
+      "id": "cont::ИП Петров",
+      "label": "ИП Петров",
+      "type": "contractor",
+      "color": "#009688",
+      "risk_score": null,
+      "risk_level": null
+    },
+    {
+      "id": "item::услуги экскаватора",
+      "label": "услуги экскаватора",
+      "type": "item",
+      "color": "#9c27b0",
+      "risk_score": 100,
+      "risk_level": "CRITICAL"
+    }
+  ],
+  "edges": [
+    {
+      "source": "dept::Отдел строительства",
+      "target": "item::бетон М300",
+      "type": "bought",
+      "label": "купил",
+      "weight": 365000.0
+    },
+    {
+      "source": "dept::Отдел строительства",
+      "target": "cont::ООО СтройСнаб",
+      "type": "works_with",
+      "label": "работает с",
+      "weight": 395000.0
+    },
+    {
+      "source": "dept::Отдел строительства",
+      "target": "item::арматура А500С",
+      "type": "bought",
+      "label": "купил",
+      "weight": 170000.0
+    },
+    {
+      "source": "dept::Отдел строительства",
+      "target": "cont::ИП Иванов",
+      "type": "works_with",
+      "label": "работает с",
+      "weight": 140000.0
+    },
+    {
+      "source": "dept::Отдел строительства",
+      "target": "dept::Отдел ремонта",
+      "type": "shared_items",
+      "label": "общие позиции",
+      "weight": 1
+    },
+    {
+      "source": "cont::ООО СтройСнаб",
+      "target": "item::бетон М300",
+      "type": "supplies",
+      "label": "поставляет",
+      "weight": 363000.0
+    },
+    {
+      "source": "cont::ООО СтройСнаб",
+      "target": "item::арматура А500С",
+      "type": "supplies",
+      "label": "поставляет",
+      "weight": 170000.0
+    },
+    {
+      "source": "cont::ИП Иванов",
+      "target": "item::бетон М300",
+      "type": "supplies",
+      "label": "поставляет",
+      "weight": 140000.0
+    },
+    {
+      "source": "dept::Отдел ремонта",
+      "target": "item::кирпич облицовочный",
+      "type": "bought",
+      "label": "купил",
+      "weight": 120000.0
+    },
+    {
+      "source": "dept::Отдел ремонта",
+      "target": "cont::ООО РемСервис",
+      "type": "works_with",
+      "label": "работает с",
+      "weight": 120000.0
+    },
+    {
+      "source": "dept::Отдел ремонта",
+      "target": "item::бетон М300",
+      "type": "bought",
+      "label": "купил",
+      "weight": 138000.0
+    },
+    {
+      "source": "dept::Отдел ремонта",
+      "target": "cont::ООО СтройСнаб",
+      "type": "works_with",
+      "label": "работает с",
+      "weight": 138000.0
+    },
+    {
+      "source": "cont::ООО РемСервис",
+      "target": "item::кирпич облицовочный",
+      "type": "supplies",
+      "label": "поставляет",
+      "weight": 120000.0
+    },
+    {
+      "source": "dept::Отдел логистики",
+      "target": "item::услуги экскаватора",
+      "type": "bought",
+      "label": "купил",
+      "weight": 125000.0
+    },
+    {
+      "source": "dept::Отдел логистики",
+      "target": "cont::ИП Петров",
+      "type": "works_with",
+      "label": "работает с",
+      "weight": 125000.0
+    },
+    {
+      "source": "cont::ИП Петров",
+      "target": "item::услуги экскаватора",
+      "type": "supplies",
+      "label": "поставляет",
+      "weight": 125000.0
+    }
+  ]
+}
