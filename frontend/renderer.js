@@ -1,14 +1,11 @@
 // frontend/renderer.js
 
 const API = 'http://localhost:8000'
-
 let selectedFiles = []
-let cyInstance    = null  // Cytoscape instance
+let cyInstance    = null
 
 
-// ─────────────────────────────────────────────
-// Файлы
-// ─────────────────────────────────────────────
+// ─── Файлы ────────────────────────────────────
 
 document.getElementById('file-input').addEventListener('change', e => addFiles(Array.from(e.target.files)))
 
@@ -31,20 +28,20 @@ function addFiles(files) {
 }
 
 function renderFileList() {
-  const list    = document.getElementById('file-list')
   const section = document.getElementById('file-list-section')
   const counter = document.getElementById('file-count')
   const btn     = document.getElementById('btn-analyze')
+  const list    = document.getElementById('file-list')
   if (!selectedFiles.length) { section.style.display = 'none'; btn.disabled = true; return }
   section.style.display = 'block'
   counter.textContent   = selectedFiles.length
   btn.disabled          = false
   const icons = { pdf: '📄', docx: '📝', xlsx: '📊' }
-  list.innerHTML = selectedFiles.map((file, i) => {
-    const ext = file.name.split('.').pop().toLowerCase()
+  list.innerHTML = selectedFiles.map((f, i) => {
+    const ext = f.name.split('.').pop().toLowerCase()
     return `<div class="file-item">
       <span class="file-icon">${icons[ext] || '📁'}</span>
-      <span class="file-name">${file.name}</span>
+      <span class="file-name">${f.name}</span>
       <span class="file-remove" onclick="removeFile(${i})">✕</span>
     </div>`
   }).join('')
@@ -61,9 +58,7 @@ function clearAll() {
 }
 
 
-// ─────────────────────────────────────────────
-// Анализ
-// ─────────────────────────────────────────────
+// ─── Анализ ────────────────────────────────────
 
 async function runAnalyze() {
   if (!selectedFiles.length) return
@@ -72,35 +67,31 @@ async function runAnalyze() {
   setProgress(10)
 
   try {
-    // 1. Upload
     const formData = new FormData()
     selectedFiles.forEach(f => formData.append('files', f))
-    setProgress(30)
+    setProgress(25)
+
     const uploadRes = await fetch(`${API}/upload`, { method: 'POST', body: formData })
     if (!uploadRes.ok) throw new Error(`Upload: ${uploadRes.status}`)
     const uploadData = await uploadRes.json()
-    setProgress(50)
+    setProgress(45)
 
-    // 2. Analyze
     const documents = uploadData.files.map(f => ({
       filename:   f.original_name,
       department: 'Основной отдел',
       contractor: 'Не указан',
       items:      f.items || []
     }))
+
     const analyzeRes = await fetch(`${API}/analyze`, {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(documents)
+      body:    JSON.stringify(documents)
     })
     if (!analyzeRes.ok) throw new Error(`Analyze: ${analyzeRes.status}`)
-    setProgress(75)
+    setProgress(70)
 
-    // 3. Results + Graph
-    const [resultsRes, graphRes] = await Promise.all([
-      fetch(`${API}/results`),
-      fetch(`${API}/graph`)
-    ])
+    const [resultsRes, graphRes] = await Promise.all([fetch(`${API}/results`), fetch(`${API}/graph`)])
     const resultsData = await resultsRes.json()
     const graphData   = await graphRes.json()
     setProgress(100)
@@ -112,6 +103,7 @@ async function runAnalyze() {
 
   } catch (err) {
     showToast(`❌ ${err.message}`, 'error')
+    console.error(err)
   } finally {
     btn.disabled = false; btn.textContent = '⚡ Запустить анализ'
     setTimeout(() => setProgress(0), 800)
@@ -119,9 +111,7 @@ async function runAnalyze() {
 }
 
 
-// ─────────────────────────────────────────────
-// Таблица результатов
-// ─────────────────────────────────────────────
+// ─── Таблица результатов ───────────────────────
 
 function renderResults(results) {
   if (!results?.length) return
@@ -150,9 +140,7 @@ function renderResults(results) {
 }
 
 
-// ─────────────────────────────────────────────
-// Граф — Cytoscape.js
-// ─────────────────────────────────────────────
+// ─── Граф (Cytoscape) ──────────────────────────
 
 function renderGraph(data) {
   const cyEl      = document.getElementById('cy')
@@ -162,49 +150,17 @@ function renderGraph(data) {
 
   if (!data?.nodes?.length) return
 
-  // Показываем контейнер
   emptyEl.style.display   = 'none'
   cyEl.style.display      = 'block'
   legendEl.style.display  = 'flex'
   controlEl.style.display = 'flex'
 
-  // Уничтожаем старый граф
   if (cyInstance) cyInstance.destroy()
 
-  // Конвертируем данные в формат Cytoscape
-  const elements = []
-
-  data.nodes.forEach(node => {
-    elements.push({
-      data: {
-        id:          node.id,
-        label:       node.label,
-        type:        node.type,
-        color:       node.color || '#607d8b',
-        risk_score:  node.risk_score,
-        risk_level:  node.risk_level,
-      }
-    })
-  })
-
-  data.edges.forEach(edge => {
-    elements.push({
-      data: {
-        id:     `${edge.source}--${edge.target}`,
-        source: edge.source,
-        target: edge.target,
-        label:  edge.label || '',
-        weight: edge.weight || 1,
-      }
-    })
-  })
-
-  // Размер узла по типу
-  const nodeSize = (type) => {
-    if (type === 'department') return 50
-    if (type === 'contractor') return 40
-    return 30
-  }
+  const elements = [
+    ...data.nodes.map(n => ({ data: { id: n.id, label: n.label, type: n.type, color: n.color || '#607d8b', risk_score: n.risk_score, risk_level: n.risk_level } })),
+    ...data.edges.map(e => ({ data: { id: `${e.source}__${e.target}`, source: e.source, target: e.target, label: e.label || '', weight: e.weight || 1 } }))
+  ]
 
   cyInstance = cytoscape({
     container: cyEl,
@@ -214,52 +170,56 @@ function renderGraph(data) {
       {
         selector: 'node',
         style: {
-          'background-color':   'data(color)',
-          'label':              'data(label)',
-          'color':              '#e8eaf2',
-          'font-size':          '11px',
-          'font-family':        'JetBrains Mono, monospace',
-          'text-valign':        'bottom',
-          'text-halign':        'center',
-          'text-margin-y':      6,
-          'text-wrap':          'wrap',
-          'text-max-width':     '120px',
-          'width':              (ele) => nodeSize(ele.data('type')),
-          'height':             (ele) => nodeSize(ele.data('type')),
-          'border-width':       2,
-          'border-color':       'rgba(255,255,255,0.15)',
-          'transition-property': 'background-color border-color',
-          'transition-duration': '0.2s',
+          'background-color':  'data(color)',
+          'label':             'data(label)',
+          'color':             '#e8eaf2',
+          'font-size':         '10px',
+          'font-family':       'JetBrains Mono, monospace',
+          'text-valign':       'bottom',
+          'text-halign':       'center',
+          'text-margin-y':     5,
+          'text-wrap':         'wrap',
+          'text-max-width':    '100px',
+          'border-width':      2,
+          'border-color':      'rgba(255,255,255,0.12)',
         }
+      },
+      {
+        selector: 'node[type="department"]',
+        style: { 'shape': 'round-rectangle', 'width': 52, 'height': 52 }
+      },
+      {
+        selector: 'node[type="contractor"]',
+        style: { 'shape': 'diamond', 'width': 44, 'height': 44 }
+      },
+      {
+        selector: 'node[type="item"]',
+        style: { 'shape': 'ellipse', 'width': 34, 'height': 34 }
       },
       {
         selector: 'node:selected',
-        style: {
-          'border-color': '#4f8ef7',
-          'border-width':  3,
-        }
+        style: { 'border-color': '#4f8ef7', 'border-width': 3 }
       },
       {
-        selector: 'node[type = "department"]',
-        style: {
-          'shape': 'round-rectangle',
-        }
-      },
-      {
-        selector: 'node[type = "contractor"]',
-        style: {
-          'shape': 'diamond',
-        }
-      },
-      {
+        // Все рёбра — светло-серые, видимые на тёмном фоне
         selector: 'edge',
         style: {
           'width':              1.5,
-          'line-color':         '#252a38',
-          'target-arrow-color': '#252a38',
+          'line-color':         '#6b7280',
+          'target-arrow-color': '#6b7280',
           'target-arrow-shape': 'triangle',
+          'arrow-scale':        0.8,
           'curve-style':        'bezier',
-          'opacity':             0.7,
+          'opacity':            0.75,
+        }
+      },
+      {
+        selector: 'edge[type="shared_items"]',
+        style: {
+          'line-color':         '#4f8ef7',
+          'target-arrow-color': '#4f8ef7',
+          'line-style':         'dashed',
+          'width':              2,
         }
       },
       {
@@ -267,87 +227,91 @@ function renderGraph(data) {
         style: {
           'line-color':         '#4f8ef7',
           'target-arrow-color': '#4f8ef7',
-          'opacity':             1,
+          'opacity':            1,
         }
       },
     ],
 
     layout: {
-      name:             'cose',
-      animate:          true,
-      animationDuration: 600,
-      nodeRepulsion:    8000,
-      idealEdgeLength:  120,
-      gravity:          0.25,
-      fit:              true,
-      padding:          40,
+      name:           'cose',
+      animate:        true,
+      animationDuration: 700,
+      randomize:      true,
+      nodeRepulsion:  () => 6000,
+      nodeOverlap:    10,
+      idealEdgeLength: () => 120,
+      edgeElasticity: () => 80,
+      nestingFactor:  1.2,
+      gravity:        80,
+      numIter:        1000,
+      initialTemp:    200,
+      coolingFactor:  0.99,
+      minTemp:        1.0,
+      fit:            true,
+      padding:        50,
     },
 
     wheelSensitivity: 0.3,
+    minZoom:          0.1,
+    maxZoom:          4,
   })
 
-  // Tooltip при наведении
+  // Tooltip
   const tooltip = document.getElementById('cy-tooltip')
-
-  cyInstance.on('mouseover', 'node', (e) => {
-    const node  = e.target
-    const pos   = e.renderedPosition
-    const data  = node.data()
-    let content = `<strong>${data.label}</strong><br>Тип: ${data.type}`
-    if (data.risk_score != null) {
-      content += `<br>Риск: ${data.risk_score}/100 <span style="color:${data.color}">${data.risk_level}</span>`
-    }
-    tooltip.innerHTML       = content
-    tooltip.style.display   = 'block'
-    tooltip.style.left      = (pos.x + 16) + 'px'
-    tooltip.style.top       = (pos.y - 10) + 'px'
-  })
-
-  cyInstance.on('mouseout', 'node', () => {
-    tooltip.style.display = 'none'
-  })
-
-  cyInstance.on('mousemove', (e) => {
+  cyInstance.on('mouseover', 'node', e => {
+    const d   = e.target.data()
     const pos = e.renderedPosition
+    let html  = `<strong>${d.label}</strong><br>Тип: ${d.type}`
+    if (d.risk_score != null) html += `<br>Риск: <span style="color:${d.color}">${d.risk_score}/100 ${d.risk_level}</span>`
+    tooltip.innerHTML     = html
+    tooltip.style.display = 'block'
+    tooltip.style.left    = (pos.x + 14) + 'px'
+    tooltip.style.top     = (pos.y - 8)  + 'px'
+  })
+  cyInstance.on('mouseout',  'node', () => tooltip.style.display = 'none')
+  cyInstance.on('mousemove', e => {
     if (tooltip.style.display === 'block') {
-      tooltip.style.left = (pos.x + 16) + 'px'
-      tooltip.style.top  = (pos.y - 10) + 'px'
+      const p = e.renderedPosition
+      tooltip.style.left = (p.x + 14) + 'px'
+      tooltip.style.top  = (p.y - 8)  + 'px'
     }
   })
 }
 
-function fitGraph()         { if (cyInstance) cyInstance.fit(undefined, 40) }
-function zoomGraph(factor)  { if (cyInstance) cyInstance.zoom({ level: cyInstance.zoom() * factor, renderedPosition: { x: cyInstance.width() / 2, y: cyInstance.height() / 2 } }) }
+function fitGraph()        { if (cyInstance) cyInstance.fit(undefined, 50) }
+function zoomGraph(factor) {
+  if (!cyInstance) return
+  cyInstance.zoom({
+    level: cyInstance.zoom() * factor,
+    renderedPosition: { x: cyInstance.width() / 2, y: cyInstance.height() / 2 }
+  })
+}
 
 
-// ─────────────────────────────────────────────
-// Raw JSON
-// ─────────────────────────────────────────────
+// ─── Raw JSON ──────────────────────────────────
 
 function renderRaw(data) {
   const out   = document.getElementById('raw-output')
   const empty = document.getElementById('empty-raw')
-  out.textContent   = JSON.stringify(data, null, 2)
+  out.textContent     = JSON.stringify(data, null, 2)
   empty.style.display = 'none'
   out.style.display   = 'block'
 }
 
 function resetResults() {
-  document.getElementById('results-body').innerHTML      = ''
-  document.getElementById('results-table').style.display = 'none'
-  document.getElementById('empty-results').style.display = 'flex'
-  document.getElementById('empty-graph').style.display   = 'flex'
-  document.getElementById('cy').style.display            = 'none'
-  document.getElementById('graph-legend').style.display  = 'none'
-  document.getElementById('graph-controls').style.display= 'none'
-  document.getElementById('raw-output').style.display    = 'none'
-  document.getElementById('empty-raw').style.display     = 'flex'
+  document.getElementById('results-body').innerHTML       = ''
+  document.getElementById('results-table').style.display  = 'none'
+  document.getElementById('empty-results').style.display  = 'flex'
+  document.getElementById('empty-graph').style.display    = 'flex'
+  document.getElementById('cy').style.display             = 'none'
+  document.getElementById('graph-legend').style.display   = 'none'
+  document.getElementById('graph-controls').style.display = 'none'
+  document.getElementById('raw-output').style.display     = 'none'
+  document.getElementById('empty-raw').style.display      = 'flex'
 }
 
 
-// ─────────────────────────────────────────────
-// Вкладки
-// ─────────────────────────────────────────────
+// ─── Вкладки ───────────────────────────────────
 
 function switchTab(name, el) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
@@ -359,23 +323,17 @@ function switchTab(name, el) {
   const tab = document.getElementById('tab-' + name)
   tab.classList.add('active')
   tab.style.display = 'flex'
-
-  // После показа вкладки графа — пересчитать размер
-  if (name === 'graph' && cyInstance) {
-    setTimeout(() => cyInstance.resize(), 50)
-  }
+  if (name === 'graph' && cyInstance) setTimeout(() => cyInstance.resize(), 30)
 }
 
 
-// ─────────────────────────────────────────────
-// Прогресс и тосты
-// ─────────────────────────────────────────────
+// ─── Прогресс ──────────────────────────────────
 
 function setProgress(pct) {
   const bar  = document.getElementById('progress-bar')
   const fill = document.getElementById('progress-fill')
   if (pct === 0) { bar.classList.remove('active'); fill.style.width = '0%' }
-  else           { bar.classList.add('active'); fill.style.width = pct + '%' }
+  else           { bar.classList.add('active');    fill.style.width = pct + '%' }
 }
 
 let toastTimer = null

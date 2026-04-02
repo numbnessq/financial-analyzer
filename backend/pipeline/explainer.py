@@ -52,12 +52,27 @@ TEMPLATES = {
 def explain(result: ScoreResult, extra_flags: list[str] | None = None) -> str:
     parts = []
 
+    # Маппинг ключевых слов из reasons → шаблон
+    REASON_KEYWORDS = {
+        "no_match":                  ["no_match", "нет совпадений", "одном документе"],
+        "deviation_20":              ["deviation_20", "отклонение", "20%"],
+        "deviation_50":              ["deviation_50", "50%", "критическое"],
+        "high_spread":               ["high_spread", "разброс", "spread"],
+        "small_sample":              ["small_sample", "малая выборка", "мало данных"],
+        "duplicate":                 ["duplicate", "дублир"],
+        "split":                     ["split", "дробление"],
+        "contractor_concentration":  ["contractor_concentration", "концентрация", "один контрагент"],
+        "distance_anomaly":          ["distance_anomaly", "расстояние"],
+        "volume_anomaly":            ["volume_anomaly", "объём", "объем"],
+    }
+
     for reason in result.reasons:
-        for key, text in TEMPLATES.items():
-            if key in reason.lower():
-                if text not in parts:
+        reason_lower = reason.lower()
+        for key, keywords in REASON_KEYWORDS.items():
+            if any(kw in reason_lower for kw in keywords):
+                text = TEMPLATES.get(key, "")
+                if text and text not in parts:
                     parts.append(text)
-                break
 
     for flag_type in (extra_flags or []):
         if flag_type in TEMPLATES:

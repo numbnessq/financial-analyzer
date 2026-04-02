@@ -1,114 +1,73 @@
 # backend/pipeline/matcher.py
-
 from rapidfuzz import fuzz, process
 
-# Порог схожести — если больше этого числа, считаем позиции одинаковыми
-# 85 — хороший баланс между точностью и гибкостью
 SIMILARITY_THRESHOLD = 70
 
 
 def find_best_match(name: str, candidates: list[str]) -> tuple[str, float] | None:
-    """
-    Ищет наиболее похожее название среди кандидатов.
-    Возвращает (найденное_название, процент_схожести) или None.
-    """
     if not candidates:
         return None
-
-    result = process.extractOne(
-        name,
-        candidates,
-        scorer=fuzz.token_sort_ratio  # сортирует слова перед сравнением
-    )
-
+    result = process.extractOne(name, candidates, scorer=fuzz.token_sort_ratio)
     if result is None:
         return None
-
     best_match, score, _ = result
-
-    if score >= SIMILARITY_THRESHOLD:
-        return best_match, score
-
-    return None
+    return (best_match, score) if score >= SIMILARITY_THRESHOLD else None
 
 
 def group_items(items: list[dict]) -> list[dict]:
     """
-    Группирует похожие позиции из разных документов.
-
-    Логика:
-    1. Берём первую позицию — создаём группу
-    2. Для каждой следующей ищем похожую группу
-    3. Если нашли — добавляем в группу
-    4. Если нет — создаём новую группу
-
-    Возвращает список групп:
-    [
-        {
-            "canonical_name": "лицензионный платёж",  # стандартное название
-            "total_quantity": 2.0,                      # суммарное количество
-            "sources": ["file1.pdf", "file2.pdf"],      # откуда взято
-            "items": [...]                              # все исходные позиции
-        }
-    ]
+    Группирует по canonical_name, накапливает prices.
     """
     if not items:
         return []
 
-    groups = []  # список групп
-    group_names = []  # названия групп для быстрого поиска
+    groups      = []
+    group_names = []
 
     for item in items:
-        item_name = item.get("name", "")
-
+        item_name = item.get("canonical_name") or item.get("name", "")
         if not item_name:
             continue
 
-        # Ищем похожую группу
         match = find_best_match(item_name, group_names)
 
         if match:
-            # Нашли похожую группу — добавляем в неё
-            matched_name, score = match
-            group_index = group_names.index(matched_name)
-
-            group = groups[group_index]
+            matched_name, _ = match
+            idx   = group_names.index(matched_name)
+            group = groups[idx]
             group["items"].append(item)
-            group["total_quantity"] += item.get("quantity", 0)
+            group["total_quantity"] += float(item.get("quantity", 0) or 0)
 
-            # Добавляем источник если его ещё нет
+            price = float(item.get("price", 0) or 0)
+            if price > 0:
+                group["prices"].append(price)
+
             source = item.get("source", "")
             if source and source not in group["sources"]:
                 group["sources"].append(source)
-
         else:
-            # Не нашли похожую группу — создаём новую
-            new_group = {
+            price = float(item.get("price", 0) or 0)
+            groups.append({
                 "canonical_name": item_name,
-                "total_quantity": item.get("quantity", 0),
-                "unit": item.get("unit", ""),
-                "sources": [item.get("source", "")] if item.get("source") else [],
-                "items": [item]
-            }
-            groups.append(new_group)
+                "total_quantity": float(item.get("quantity", 0) or 0),
+                "unit":           item.get("unit", ""),
+                "sources":        [item.get("source", "")] if item.get("source") else [],
+                "prices":         [price] if price > 0 else [],
+                "items":          [item],
+            })
             group_names.append(item_name)
 
     return groups
 
 
 def match_across_documents(documents: list[dict]) -> list[dict]:
-    """
-    Принимает список результатов по документам,
-    собирает все позиции вместе и группирует их.
-
-    documents — список вида:
-    [{"filename": "...", "items": [...]}, ...]
-    """
-    # Собираем все позиции из всех документов в один список
     all_items = []
     for doc in documents:
-        items = doc.get("items", [])
-        all_items.extend(items)
-
-    # Группируем похожие позиции
+        dept       = doc.get("department", "")
+        contractor = doc.get("contractor", "")
+        for item in doc.get("items", []):
+            enriched = dict(item)
+            if dept       and not enriched.get("department"):  enriched["department"]  = dept
+            if contractor and not enriched.get("contractor"):  enriched["contractor"]  = contractor
+            all_items.append(enriched)
     return group_items(all_items)

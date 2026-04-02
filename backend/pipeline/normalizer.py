@@ -1,10 +1,5 @@
 # backend/pipeline/normalizer.py
-
 import re
-
-# ─────────────────────────────────────────────
-# Нормализация единиц измерения
-# ─────────────────────────────────────────────
 
 UNIT_MAP = {
     "куб.м": "м3", "куб м": "м3", "кубометр": "м3", "m3": "м3",
@@ -12,10 +7,18 @@ UNIT_MAP = {
     "килограмм": "кг", "кило": "кг", "kg": "кг",
     "тонна": "т",  "тн": "т",
     "штука": "шт", "штук": "шт", "единица": "шт",
-    "литр":  "л",  "л.":   "л",
-    "метр":  "м",  "м.":   "м",
+    "литр":  "л",  "л.": "л",
+    "метр":  "м",  "м.": "м",
     "час":   "ч",  "часов": "ч",
 }
+
+NOISE_WORDS = [
+    "марки", "марка", "класса", "класс", "типа", "тип",
+    "сорта", "сорт", "строительный", "строительная", "строительного",
+    "фракции", "фракция", "размером", "размер",
+    "рядовой", "крупный", "мелкий", "средний",
+    "гравийный", "гранитный", "известняковый",
+]
 
 
 def normalize_unit(unit: str) -> str:
@@ -25,68 +28,43 @@ def normalize_unit(unit: str) -> str:
     return UNIT_MAP.get(u, u)
 
 
-# ─────────────────────────────────────────────
-# Канонизация названий позиций
-# ─────────────────────────────────────────────
-
 def canonicalize(name: str) -> str:
-    """
-    Приводит название позиции к единому виду.
-
-    Примеры:
-        "бетон М-300"      → "бетон м300"
-        "бетон марки М300" → "бетон м300"
-        "Арматура А500С"   → "арматура а500с"
-        "куб.м"            → "м3"
-    """
     if not name:
         return ""
-
     name = name.lower().strip()
-
-    # Убираем лишние слова
-    noise_words = ["марки", "марка", "класса", "класс", "типа", "тип", "сорта", "сорт"]
-    for word in noise_words:
+    for word in NOISE_WORDS:
         name = re.sub(rf'\b{word}\b', '', name)
-
-    # Убираем дефисы между буквой/числом и числом: М-300 → м300
-    name = re.sub(r'([а-яa-z])[-–](\d)', r'\1\2', name)
-
-    # Убираем пробелы между буквой и числом: м 300 → м300
-    name = re.sub(r'([а-яa-z])\s+(\d)', r'\1\2', name)
-
-    # Схлопываем множественные пробелы
+    name = re.sub(r'\b\d+\s*[-/×x]\s*\d+\b', '', name)
+    name = re.sub(r'([а-яёa-z])[-–](\d)', r'\1\2', name)
+    name = re.sub(r'([а-яёa-z])\s+(\d)', r'\1\2', name)
     name = re.sub(r'\s+', ' ', name).strip()
-
     return name
 
 
-# ─────────────────────────────────────────────
-# Нормализация списка позиций
-# ─────────────────────────────────────────────
-
 def normalize_items(items: list, source: str = "") -> list:
-    """
-    Нормализует список позиций:
-    - canonical_name через canonicalize()
-    - unit через normalize_unit()
-    - добавляет source
-    """
     result = []
     for item in items:
         if not isinstance(item, dict):
             continue
-
         raw_name = str(item.get("name", "")).strip()
         if not raw_name:
             continue
-
-        normalized = dict(item)
-        normalized["name"]           = raw_name
-        normalized["canonical_name"] = canonicalize(raw_name)
-        normalized["unit"]           = normalize_unit(str(item.get("unit", "")))
-        normalized["source"]         = source
-
-        result.append(normalized)
-
+        result.append({
+            "name":           raw_name,
+            "canonical_name": canonicalize(raw_name),
+            "price":          _to_float(item.get("price", 0)),
+            "quantity":       _to_float(item.get("quantity", 1)),
+            "unit":           normalize_unit(str(item.get("unit", ""))),
+            "source":         source or item.get("source", ""),
+            "department":     item.get("department", ""),
+            "contractor":     item.get("contractor", ""),
+            "date":           item.get("date", None),
+        })
     return result
+
+
+def _to_float(value) -> float:
+    try:
+        return float(str(value).replace(",", ".").strip() or 0)
+    except (ValueError, TypeError):
+        return 0.0
