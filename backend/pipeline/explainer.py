@@ -1,101 +1,87 @@
-"""
-explainer.py — AI объяснения аномалий через Ollama.
-Файл: backend/pipeline/explainer.py
-"""
+# backend/pipeline/explainer.py
+# Шаблонные объяснения — без AI, быстро и точно.
 
-import httpx
 from backend.pipeline.scorer import ScoreResult
 
 
-# ─────────────────────────────────────────────
-# Настройки Ollama — измени модель если нужно
-# ─────────────────────────────────────────────
-
-OLLAMA_URL   = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "mistral"  # ← вставь сюда название из: ollama list
-
-
-# ─────────────────────────────────────────────
-# Формирование промпта
-# ─────────────────────────────────────────────
-
-def build_prompt(result: ScoreResult) -> str:
-    stats = result.stats
-    reasons_text = "\n".join(f"- {r}" for r in result.reasons) if result.reasons else "- нет"
-
-    return f"""Ты — аналитик закупок. Объясни простым языком почему позиция подозрительна.
-
-Позиция: {result.name}
-Риск-скор: {result.score}/100 ({result.risk_level})
-Цены в документах: {stats.prices}
-Средняя цена: {stats.avg_price}
-Минимальная: {stats.min_price}
-Максимальная: {stats.max_price}
-Отклонение от средней: {stats.deviation_pct}%
-Найдена в других документах: {"да" if stats.has_match else "нет"}
-
-Сработавшие правила:
-{reasons_text}
-
-Напиши 2–3 предложения: что именно подозрительно и почему это важно проверить.
-Без технических терминов. Только на русском языке."""
-
-
-# ─────────────────────────────────────────────
-# Запрос к Ollama
-# ─────────────────────────────────────────────
-
-def explain(result: ScoreResult) -> str:
-    prompt = build_prompt(result)
-
-    try:
-        response = httpx.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        return response.json()["message"]["content"].strip()
-
-    except Exception as e:
-        return f"Ошибка подключения к Ollama: {e}"
+TEMPLATES = {
+    "no_match": (
+        "Позиция встречается только в одном документе — "
+        "сравнить цену не с чем. Требуется ручная проверка обоснованности."
+    ),
+    "deviation_20": (
+        "Цена отклоняется от средней более чем на 20%. "
+        "Возможно завышение стоимости или ошибка в данных."
+    ),
+    "deviation_50": (
+        "Цена отклоняется от средней более чем на 50% — критическое отклонение. "
+        "Необходима проверка поставщика и условий договора."
+    ),
+    "high_spread": (
+        "Сильный разброс цен между документами. "
+        "Разные подразделения закупают по существенно разным ценам — "
+        "возможна манипуляция или отсутствие единого поставщика."
+    ),
+    "small_sample": (
+        "Малая выборка — менее 3 цен. "
+        "Недостаточно данных для объективной оценки."
+    ),
+    "duplicate": (
+        "Одинаковая позиция закупается несколькими отделами — "
+        "возможно дублирование закупки через разных поставщиков."
+    ),
+    "split": (
+        "Закупка разбита на несколько мелких операций, "
+        "что может скрывать общий объём и обходить лимиты согласования."
+    ),
+    "contractor_concentration": (
+        "Один контрагент доминирует в закупках — "
+        "высокая концентрация может указывать на аффилированность."
+    ),
+    "distance_anomaly": (
+        "Заявленное расстояние значительно превышает типичное. "
+        "Возможно завышение транспортных расходов."
+    ),
+    "volume_anomaly": (
+        "Объём закупки значительно превышает типичный для этой позиции. "
+        "Рекомендуется проверить реальную потребность."
+    ),
+}
 
 
-def explain_all(results: list[ScoreResult]) -> list[dict]:
+def explain(result: ScoreResult, extra_flags: list[str] | None = None) -> str:
+    parts = []
+
+    for reason in result.reasons:
+        for key, text in TEMPLATES.items():
+            if key in reason.lower():
+                if text not in parts:
+                    parts.append(text)
+                break
+
+    for flag_type in (extra_flags or []):
+        if flag_type in TEMPLATES:
+            text = TEMPLATES[flag_type]
+            if text not in parts:
+                parts.append(text)
+
+    if not parts:
+        return "Значительных аномалий не обнаружено."
+
+    return " ".join(parts)
+
+
+def explain_all(
+    results: list[ScoreResult],
+    flags_by_item: dict[str, list[str]] | None = None,
+) -> list[dict]:
     output = []
     for r in results:
+        extra = (flags_by_item or {}).get(r.name, [])
         output.append({
             "name":        r.name,
             "score":       r.score,
             "risk_level":  r.risk_level,
-            "explanation": explain(r),
+            "explanation": explain(r, extra),
         })
     return output
-
-
-# ─────────────────────────────────────────────
-# Запуск / демо
-# ─────────────────────────────────────────────
-
-if __name__ == "__main__":
-    from scorer import score_all, ItemStats
-
-    items = [
-        ItemStats(name="бетон М300",         prices=[4500, 4600, 4550, 7000], has_match=True),
-        ItemStats(name="арматура А500С",      prices=[85000],                  has_match=False),
-        ItemStats(name="услуги экскаватора",  prices=[10000, 25000],           has_match=False),
-    ]
-
-    results = score_all(items)
-    explanations = explain_all(results)
-
-    print("\n=== AI Объяснения аномалий ===\n")
-    for e in explanations:
-        icons = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴", "CRITICAL": "🚨"}
-        print(f"{icons.get(e['risk_level'], '⚪')} [{e['score']}/100] {e['name']}")
-        print(f"   {e['explanation']}")
-        print()

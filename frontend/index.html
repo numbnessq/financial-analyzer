@@ -4,393 +4,123 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Анализатор документов</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap');
 
     :root {
-      --bg:        #0d0f14;
-      --bg2:       #13161e;
-      --bg3:       #1a1e2a;
-      --border:    #252a38;
-      --accent:    #4f8ef7;
-      --accent2:   #7c5af7;
-      --green:     #3dd68c;
-      --orange:    #f7a24f;
-      --red:       #f75a5a;
-      --purple:    #b45af7;
-      --text:      #e8eaf2;
-      --muted:     #6b7280;
-      --font:      'Syne', sans-serif;
-      --mono:      'JetBrains Mono', monospace;
+      --bg:      #0d0f14; --bg2: #13161e; --bg3: #1a1e2a;
+      --border:  #252a38; --accent: #4f8ef7; --accent2: #7c5af7;
+      --green:   #3dd68c; --orange: #f7a24f; --red: #f75a5a;
+      --purple:  #b45af7; --text: #e8eaf2; --muted: #6b7280;
+      --font:    'Syne', sans-serif; --mono: 'JetBrains Mono', monospace;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: var(--font); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--font);
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+    header { padding: 14px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--bg2); -webkit-app-region: drag; }
+    header .logo { width: 28px; height: 28px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: 8px; }
+    header h1 { font-size: 15px; font-weight: 800; }
+    header .status { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
+    header .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-    /* ── Шапка ── */
-    header {
-      padding: 14px 24px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      background: var(--bg2);
-      -webkit-app-region: drag;
-    }
+    .layout { display: flex; flex: 1; overflow: hidden; }
 
-    header .logo {
-      width: 28px; height: 28px;
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      border-radius: 8px;
-    }
+    .sidebar { width: 300px; border-right: 1px solid var(--border); background: var(--bg2); display: flex; flex-direction: column; padding: 20px; gap: 20px; overflow-y: auto; }
+    .section-label { font-size: 10px; font-weight: 600; letter-spacing: 1.5px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; }
 
-    header h1 {
-      font-size: 15px;
-      font-weight: 800;
-      letter-spacing: 0.5px;
-    }
-
-    header .status {
-      margin-left: auto;
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      -webkit-app-region: no-drag;
-    }
-
-    header .dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: var(--green);
-      animation: pulse 2s infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.4; }
-    }
-
-    /* ── Основной layout ── */
-    .layout {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
-    }
-
-    /* ── Боковая панель ── */
-    .sidebar {
-      width: 300px;
-      border-right: 1px solid var(--border);
-      background: var(--bg2);
-      display: flex;
-      flex-direction: column;
-      padding: 20px;
-      gap: 20px;
-      overflow-y: auto;
-    }
-
-    .section-label {
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 1.5px;
-      color: var(--muted);
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
-
-    /* ── Загрузка файлов ── */
-    .drop-zone {
-      border: 2px dashed var(--border);
-      border-radius: 12px;
-      padding: 24px 16px;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.2s;
-      background: var(--bg3);
-    }
-
-    .drop-zone:hover, .drop-zone.active {
-      border-color: var(--accent);
-      background: rgba(79, 142, 247, 0.05);
-    }
-
-    .drop-zone .icon {
-      font-size: 28px;
-      margin-bottom: 8px;
-    }
-
-    .drop-zone p {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.5;
-    }
-
-    .drop-zone span {
-      color: var(--accent);
-      font-weight: 600;
-    }
-
+    .drop-zone { border: 2px dashed var(--border); border-radius: 12px; padding: 24px 16px; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--bg3); }
+    .drop-zone:hover, .drop-zone.active { border-color: var(--accent); background: rgba(79,142,247,0.05); }
+    .drop-zone .icon { font-size: 28px; margin-bottom: 8px; }
+    .drop-zone p { font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .drop-zone span { color: var(--accent); font-weight: 600; }
     #file-input { display: none; }
 
-    /* ── Список файлов ── */
-    .file-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .file-item {
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 12px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      animation: fadeIn 0.2s ease;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(-4px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
+    .file-list { display: flex; flex-direction: column; gap: 6px; }
+    .file-item { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
     .file-item .file-icon { font-size: 16px; }
     .file-item .file-name { flex: 1; color: var(--text); font-family: var(--mono); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .file-item .file-remove { cursor: pointer; color: var(--muted); font-size: 14px; transition: color 0.15s; }
     .file-item .file-remove:hover { color: var(--red); }
 
-    /* ── Кнопки ── */
-    .btn {
-      width: 100%;
-      padding: 11px 16px;
-      border: none;
-      border-radius: 10px;
-      font-family: var(--font);
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
-      letter-spacing: 0.3px;
-    }
-
-    .btn-primary {
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      color: white;
-    }
-
+    .btn { width: 100%; padding: 11px 16px; border: none; border-radius: 10px; font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: white; }
     .btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
     .btn-primary:active { transform: translateY(0); }
     .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-
-    .btn-secondary {
-      background: var(--bg3);
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-
+    .btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
     .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
 
-    /* ── Прогресс ── */
-    .progress-bar {
-      height: 3px;
-      background: var(--border);
-      border-radius: 2px;
-      overflow: hidden;
-      display: none;
-    }
-
+    .progress-bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; display: none; }
     .progress-bar.active { display: block; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 2px; transition: width 0.3s ease; width: 0%; }
 
-    .progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, var(--accent), var(--accent2));
-      border-radius: 2px;
-      transition: width 0.3s ease;
-      width: 0%;
-    }
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-    /* ── Главная область ── */
-    .main {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    /* ── Вкладки ── */
-    .tabs {
-      display: flex;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg2);
-      padding: 0 20px;
-    }
-
-    .tab {
-      padding: 12px 18px;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--muted);
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: all 0.15s;
-      letter-spacing: 0.3px;
-    }
-
+    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg2); padding: 0 20px; }
+    .tab { padding: 12px 18px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
     .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-    .tab.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
+    .tab-content { flex: 1; overflow: auto; padding: 24px; display: none; }
+    .tab-content.active { display: flex; flex-direction: column; }
+
+    /* Graph */
+    #tab-graph { padding: 0 !important; position: relative; overflow: hidden; }
+    #cy { width: 100%; height: 100%; background: var(--bg); display: none; }
+
+    .graph-legend {
+      position: absolute; top: 16px; right: 16px;
+      background: rgba(19,22,30,0.92); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 16px; font-size: 11px;
+      display: none; flex-direction: column; gap: 7px; z-index: 10;
+      backdrop-filter: blur(6px);
+    }
+    .legend-title { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 1px; margin-bottom: 4px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    .graph-controls {
+      position: absolute; bottom: 16px; right: 16px;
+      display: none; gap: 8px; z-index: 10;
+    }
+    .graph-btn { background: rgba(19,22,30,0.92); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer; transition: all 0.15s; backdrop-filter: blur(6px); }
+    .graph-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Node tooltip */
+    .cy-tooltip {
+      position: absolute; background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 12px; font-size: 12px;
+      pointer-events: none; display: none; z-index: 20; max-width: 240px; line-height: 1.5;
     }
 
-    /* ── Контент вкладок ── */
-    .tab-content {
-      flex: 1;
-      overflow: auto;
-      padding: 24px;
-      display: none;
-    }
-
-    .tab-content.active { display: block; }
-
-    /* ── Пустое состояние ── */
-    .empty-state {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      gap: 12px;
-      color: var(--muted);
-    }
-
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--muted); }
     .empty-state .big-icon { font-size: 48px; opacity: 0.4; }
     .empty-state p { font-size: 13px; }
 
-    /* ── Таблица результатов ── */
-    .results-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-
-    .results-table th {
-      text-align: left;
-      padding: 10px 14px;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: var(--muted);
-      border-bottom: 1px solid var(--border);
-    }
-
-    .results-table td {
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--border);
-      vertical-align: top;
-    }
-
+    .results-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .results-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); }
+    .results-table td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
     .results-table tr:hover td { background: var(--bg3); }
 
-    .badge {
-      display: inline-block;
-      padding: 3px 8px;
-      border-radius: 5px;
-      font-size: 11px;
-      font-weight: 600;
-      font-family: var(--mono);
-    }
-
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 600; font-family: var(--mono); }
     .badge-LOW      { background: rgba(61,214,140,0.15); color: var(--green); }
-    .badge-MEDIUM   { background: rgba(247,162,79,0.15);  color: var(--orange); }
-    .badge-HIGH     { background: rgba(247,90,90,0.15);   color: var(--red); }
-    .badge-CRITICAL { background: rgba(180,90,247,0.15);  color: var(--purple); }
+    .badge-MEDIUM   { background: rgba(247,162,79,0.15); color: var(--orange); }
+    .badge-HIGH     { background: rgba(247,90,90,0.15);  color: var(--red); }
+    .badge-CRITICAL { background: rgba(180,90,247,0.15); color: var(--purple); }
 
-    .score-bar {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+    .score-bar { display: flex; align-items: center; gap: 8px; }
+    .score-track { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .score-fill { height: 100%; border-radius: 3px; }
+    .score-num { font-family: var(--mono); font-size: 12px; font-weight: 600; min-width: 32px; }
+    .explanation { font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 420px; }
 
-    .score-track {
-      flex: 1;
-      height: 5px;
-      background: var(--border);
-      border-radius: 3px;
-      overflow: hidden;
-    }
+    .json-output { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; font-family: var(--mono); font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; overflow: auto; color: #a8b4c8; flex: 1; }
 
-    .score-fill {
-      height: 100%;
-      border-radius: 3px;
-      transition: width 0.6s ease;
-    }
-
-    .score-num {
-      font-family: var(--mono);
-      font-size: 12px;
-      font-weight: 600;
-      min-width: 32px;
-    }
-
-    .explanation {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.55;
-      max-width: 420px;
-    }
-
-    /* ── JSON вывод ── */
-    .json-output {
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px;
-      font-family: var(--mono);
-      font-size: 12px;
-      line-height: 1.7;
-      white-space: pre-wrap;
-      word-break: break-all;
-      overflow: auto;
-      max-height: 100%;
-      color: #a8b4c8;
-    }
-
-    /* ── Уведомление ── */
-    .toast {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 18px;
-      font-size: 13px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      transform: translateY(80px);
-      opacity: 0;
-      transition: all 0.3s ease;
-      z-index: 100;
-      max-width: 320px;
-    }
-
+    .toast { position: fixed; bottom: 24px; right: 24px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 18px; font-size: 13px; display: flex; align-items: center; gap: 10px; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; z-index: 100; max-width: 320px; }
     .toast.show { transform: translateY(0); opacity: 1; }
     .toast.error { border-color: var(--red); }
     .toast.success { border-color: var(--green); }
@@ -398,106 +128,91 @@
 </head>
 <body>
 
-  <!-- Шапка -->
   <header>
     <div class="logo"></div>
     <h1>Анализатор документов</h1>
     <div class="status">
       <div class="dot"></div>
-      <span id="server-status">backend: localhost:8000</span>
+      <span>backend: localhost:8000</span>
     </div>
   </header>
 
   <div class="layout">
-
-    <!-- Боковая панель -->
     <aside class="sidebar">
-
-      <!-- Загрузка файлов -->
       <div>
         <div class="section-label">Документы</div>
         <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
           <div class="icon">📂</div>
-          <p><span>Выбери файлы</span> или перетащи сюда<br>PDF, DOCX, XLSX</p>
+          <p><span>Выбери файлы</span> или перетащи<br>PDF, DOCX, XLSX</p>
         </div>
         <input type="file" id="file-input" multiple accept=".pdf,.docx,.xlsx" />
       </div>
 
-      <!-- Список файлов -->
       <div id="file-list-section" style="display:none">
         <div class="section-label">Загружено <span id="file-count">0</span> файлов</div>
         <div class="file-list" id="file-list"></div>
       </div>
 
-      <!-- Прогресс -->
       <div class="progress-bar" id="progress-bar">
         <div class="progress-fill" id="progress-fill"></div>
       </div>
 
-      <!-- Кнопки -->
-      <button class="btn btn-primary" id="btn-analyze" disabled onclick="runAnalyze()">
-        ⚡ Запустить анализ
-      </button>
-
-      <button class="btn btn-secondary" onclick="clearAll()">
-        Очистить всё
-      </button>
-
+      <button class="btn btn-primary" id="btn-analyze" disabled onclick="runAnalyze()">⚡ Запустить анализ</button>
+      <button class="btn btn-secondary" onclick="clearAll()">Очистить всё</button>
     </aside>
 
-    <!-- Основная область -->
     <main class="main">
-
-      <!-- Вкладки -->
       <div class="tabs">
         <div class="tab active" onclick="switchTab('results', this)">Результаты</div>
-        <div class="tab" onclick="switchTab('graph', this)">Граф (JSON)</div>
+        <div class="tab" onclick="switchTab('graph', this)">Граф</div>
         <div class="tab" onclick="switchTab('raw', this)">Raw JSON</div>
       </div>
 
-      <!-- Вкладка: Результаты -->
+      <!-- Результаты -->
       <div class="tab-content active" id="tab-results">
-        <div class="empty-state" id="empty-results">
-          <div class="big-icon">🔍</div>
-          <p>Загрузи файлы и запусти анализ</p>
+        <div class="empty-state" id="empty-results" style="flex:1">
+          <div class="big-icon">🔍</div><p>Загрузи файлы и запусти анализ</p>
         </div>
         <table class="results-table" id="results-table" style="display:none">
-          <thead>
-            <tr>
-              <th>Позиция</th>
-              <th>Риск-скор</th>
-              <th>Уровень</th>
-              <th>Объяснение</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Позиция</th><th>Риск-скор</th><th>Уровень</th><th>Объяснение</th></tr></thead>
           <tbody id="results-body"></tbody>
         </table>
       </div>
 
-      <!-- Вкладка: Граф JSON -->
+      <!-- Граф -->
       <div class="tab-content" id="tab-graph">
-        <div class="empty-state" id="empty-graph">
-          <div class="big-icon">🕸️</div>
-          <p>Граф появится после анализа</p>
+        <div class="empty-state" id="empty-graph" style="flex:1">
+          <div class="big-icon">🕸️</div><p>Граф появится после анализа</p>
         </div>
-        <div class="json-output" id="graph-output" style="display:none"></div>
+        <div id="cy"></div>
+        <div class="graph-legend" id="graph-legend">
+          <div class="legend-title">ЛЕГЕНДА</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#2196f3"></div>Подразделение</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#009688"></div>Контрагент</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#3dd68c"></div>LOW риск</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#f7a24f"></div>MEDIUM риск</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#f75a5a"></div>HIGH риск</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#b45af7"></div>CRITICAL риск</div>
+        </div>
+        <div class="graph-controls" id="graph-controls">
+          <button class="graph-btn" onclick="fitGraph()">⊡ Всё</button>
+          <button class="graph-btn" onclick="zoomGraph(1.2)">＋</button>
+          <button class="graph-btn" onclick="zoomGraph(0.8)">－</button>
+        </div>
+        <div class="cy-tooltip" id="cy-tooltip"></div>
       </div>
 
-      <!-- Вкладка: Raw JSON -->
+      <!-- Raw JSON -->
       <div class="tab-content" id="tab-raw">
-        <div class="empty-state" id="empty-raw">
-          <div class="big-icon">{ }</div>
-          <p>Сырой JSON появится после анализа</p>
+        <div class="empty-state" id="empty-raw" style="flex:1">
+          <div class="big-icon">{ }</div><p>Raw JSON появится после анализа</p>
         </div>
         <div class="json-output" id="raw-output" style="display:none"></div>
       </div>
-
     </main>
   </div>
 
-  <!-- Уведомление -->
   <div class="toast" id="toast"></div>
-
   <script src="renderer.js"></script>
 </body>
 </html>
