@@ -58,7 +58,7 @@ function clearAll() {
 }
 
 
-// ─── Анализ ────────────────────────────────────
+// ─── Анализ ───────────────────────────────────
 
 async function runAnalyze() {
   if (!selectedFiles.length) return
@@ -79,14 +79,14 @@ async function runAnalyze() {
     const documents = uploadData.files.map(f => ({
       filename:   f.original_name,
       department: 'Основной отдел',
-      contractor: 'Не указан',
+      contractor: '',          // ← пустой, не "Не указан"
       items:      f.items || []
     }))
 
     const analyzeRes = await fetch(`${API}/analyze`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(documents)
+      body: JSON.stringify(documents)
     })
     if (!analyzeRes.ok) throw new Error(`Analyze: ${analyzeRes.status}`)
     setProgress(70)
@@ -111,7 +111,7 @@ async function runAnalyze() {
 }
 
 
-// ─── Таблица результатов ───────────────────────
+// ─── Таблица результатов ──────────────────────
 
 function renderResults(results) {
   if (!results?.length) return
@@ -124,13 +124,13 @@ function renderResults(results) {
     const color = colors[r.risk_level] || '#6b7280'
     return `<tr>
       <td><strong>${r.name}</strong></td>
-      <td>
+      <td style="white-space:nowrap">
         <div class="score-bar">
           <div class="score-track"><div class="score-fill" style="width:${r.score}%;background:${color}"></div></div>
-          <span class="score-num" style="color:${color}">${r.score}</span>
+          <span class="score-num" style="color:${color};font-family:monospace">${r.score}</span>
         </div>
       </td>
-      <td><span class="badge badge-${r.risk_level}">${r.risk_level}</span></td>
+      <td style="white-space:nowrap"><span class="badge badge-${r.risk_level}">${r.risk_level}</span></td>
       <td><div class="explanation">${r.explanation || '—'}</div></td>
     </tr>`
   }).join('')
@@ -140,7 +140,7 @@ function renderResults(results) {
 }
 
 
-// ─── Граф (Cytoscape) ──────────────────────────
+// ─── Граф — Cytoscape breadthfirst ───────────
 
 function renderGraph(data) {
   const cyEl      = document.getElementById('cy')
@@ -157,9 +157,33 @@ function renderGraph(data) {
 
   if (cyInstance) cyInstance.destroy()
 
+  // Строим элементы — сортируем узлы чтобы departments шли первыми
+  const sortOrder = { department: 0, contractor: 1, item: 2 }
+  const sortedNodes = [...data.nodes].sort((a, b) =>
+    (sortOrder[a.type] ?? 3) - (sortOrder[b.type] ?? 3)
+  )
+
   const elements = [
-    ...data.nodes.map(n => ({ data: { id: n.id, label: n.label, type: n.type, color: n.color || '#607d8b', risk_score: n.risk_score, risk_level: n.risk_level } })),
-    ...data.edges.map(e => ({ data: { id: `${e.source}__${e.target}`, source: e.source, target: e.target, label: e.label || '', weight: e.weight || 1 } }))
+    ...sortedNodes.map(n => ({
+      data: {
+        id:         n.id,
+        label:      n.label,
+        type:       n.type,
+        color:      n.color || '#607d8b',
+        risk_score: n.risk_score,
+        risk_level: n.risk_level,
+      }
+    })),
+    ...data.edges.map(e => ({
+      data: {
+        id:     `${e.source}__${e.target}`,
+        source: e.source,
+        target: e.target,
+        label:  e.label || '',
+        etype:  e.type  || '',
+        weight: e.weight || 1,
+      }
+    }))
   ]
 
   cyInstance = cytoscape({
@@ -167,102 +191,112 @@ function renderGraph(data) {
     elements,
 
     style: [
+      // Базовый стиль всех узлов
       {
         selector: 'node',
         style: {
-          'background-color':  'data(color)',
-          'label':             'data(label)',
-          'color':             '#e8eaf2',
-          'font-size':         '10px',
-          'font-family':       'JetBrains Mono, monospace',
-          'text-valign':       'bottom',
-          'text-halign':       'center',
-          'text-margin-y':     5,
-          'text-wrap':         'wrap',
-          'text-max-width':    '100px',
-          'border-width':      2,
-          'border-color':      'rgba(255,255,255,0.12)',
+          'background-color': 'data(color)',
+          'label':            'data(label)',
+          'color':            '#e8eaf2',
+          'font-size':        '10px',
+          'font-family':      'JetBrains Mono, monospace',
+          'text-valign':      'bottom',
+          'text-halign':      'center',
+          'text-margin-y':    6,
+          'text-wrap':        'wrap',
+          'text-max-width':   '110px',
+          'border-width':     2,
+          'border-color':     'rgba(255,255,255,0.12)',
         }
       },
+      // Departments — круг, крупный, сверху
       {
         selector: 'node[type="department"]',
-        style: { 'shape': 'round-rectangle', 'width': 52, 'height': 52 }
+        style: { shape: 'ellipse', width: 60, height: 60 }
       },
-      {
-        selector: 'node[type="contractor"]',
-        style: { 'shape': 'diamond', 'width': 44, 'height': 44 }
-      },
+      // Items — прямоугольник, средний
       {
         selector: 'node[type="item"]',
-        style: { 'shape': 'ellipse', 'width': 34, 'height': 34 }
+        style: { shape: 'round-rectangle', width: 50, height: 30 }
+      },
+      // Contractors — ромб, снизу
+      {
+        selector: 'node[type="contractor"]',
+        style: { shape: 'diamond', width: 48, height: 48 }
       },
       {
         selector: 'node:selected',
         style: { 'border-color': '#4f8ef7', 'border-width': 3 }
       },
+      // Рёбра — видимые на тёмном фоне
       {
-        // Все рёбра — светло-серые, видимые на тёмном фоне
         selector: 'edge',
         style: {
-          'width':              1.5,
+          width:                1.5,
           'line-color':         '#6b7280',
           'target-arrow-color': '#6b7280',
           'target-arrow-shape': 'triangle',
-          'arrow-scale':        0.8,
+          'arrow-scale':        0.9,
           'curve-style':        'bezier',
-          'opacity':            0.75,
+          opacity:              0.8,
         }
       },
+      // Связи "работает с" — синие
       {
-        selector: 'edge[type="shared_items"]',
+        selector: 'edge[etype="works_with"]',
         style: {
           'line-color':         '#4f8ef7',
           'target-arrow-color': '#4f8ef7',
-          'line-style':         'dashed',
-          'width':              2,
+        }
+      },
+      // Связи "поставляет" — бирюзовые
+      {
+        selector: 'edge[etype="supplies"]',
+        style: {
+          'line-color':         '#009688',
+          'target-arrow-color': '#009688',
         }
       },
       {
         selector: 'edge:selected',
         style: {
-          'line-color':         '#4f8ef7',
-          'target-arrow-color': '#4f8ef7',
-          'opacity':            1,
+          'line-color':         '#fff',
+          'target-arrow-color': '#fff',
+          opacity:              1,
         }
       },
     ],
 
+    // breadthfirst — детерминированный, иерархичный, сверху вниз
+    // departments → items → contractors
     layout: {
-      name:           'cose',
-      animate:        true,
-      animationDuration: 700,
-      randomize:      true,
-      nodeRepulsion:  () => 6000,
-      nodeOverlap:    10,
-      idealEdgeLength: () => 120,
-      edgeElasticity: () => 80,
-      nestingFactor:  1.2,
-      gravity:        80,
-      numIter:        1000,
-      initialTemp:    200,
-      coolingFactor:  0.99,
-      minTemp:        1.0,
-      fit:            true,
-      padding:        50,
+      name:      'breadthfirst',
+      directed:  true,
+      padding:   40,
+      spacingFactor: 1.6,
+      animate:   true,
+      animationDuration: 500,
+      fit:       true,
+      // Корни — все department узлы
+      roots: data.nodes
+        .filter(n => n.type === 'department')
+        .map(n => n.id),
     },
 
     wheelSensitivity: 0.3,
-    minZoom:          0.1,
-    maxZoom:          4,
+    minZoom: 0.1,
+    maxZoom: 4,
   })
 
-  // Tooltip
+  // Tooltip при наведении
   const tooltip = document.getElementById('cy-tooltip')
   cyInstance.on('mouseover', 'node', e => {
     const d   = e.target.data()
     const pos = e.renderedPosition
     let html  = `<strong>${d.label}</strong><br>Тип: ${d.type}`
-    if (d.risk_score != null) html += `<br>Риск: <span style="color:${d.color}">${d.risk_score}/100 ${d.risk_level}</span>`
+    if (d.risk_score != null && d.type === 'item') {
+      html += `<br>Риск: <span style="color:${d.color}">${d.risk_score}/100 ${d.risk_level}</span>`
+    }
     tooltip.innerHTML     = html
     tooltip.style.display = 'block'
     tooltip.style.left    = (pos.x + 14) + 'px'
@@ -278,7 +312,7 @@ function renderGraph(data) {
   })
 }
 
-function fitGraph()        { if (cyInstance) cyInstance.fit(undefined, 50) }
+function fitGraph()        { if (cyInstance) cyInstance.fit(undefined, 40) }
 function zoomGraph(factor) {
   if (!cyInstance) return
   cyInstance.zoom({
@@ -288,7 +322,7 @@ function zoomGraph(factor) {
 }
 
 
-// ─── Raw JSON ──────────────────────────────────
+// ─── Raw JSON ─────────────────────────────────
 
 function renderRaw(data) {
   const out   = document.getElementById('raw-output')
@@ -311,7 +345,7 @@ function resetResults() {
 }
 
 
-// ─── Вкладки ───────────────────────────────────
+// ─── Вкладки ──────────────────────────────────
 
 function switchTab(name, el) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
@@ -327,7 +361,7 @@ function switchTab(name, el) {
 }
 
 
-// ─── Прогресс ──────────────────────────────────
+// ─── Утилиты ──────────────────────────────────
 
 function setProgress(pct) {
   const bar  = document.getElementById('progress-bar')

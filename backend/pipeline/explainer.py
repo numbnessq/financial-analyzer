@@ -1,89 +1,70 @@
 # backend/pipeline/explainer.py
-# Шаблонные объяснения — без AI, быстро и точно.
+# Rule-based объяснения. AI не используется.
 
 from backend.pipeline.scorer import ScoreResult
 
 
-TEMPLATES = {
-    "no_match": (
-        "Позиция встречается только в одном документе — "
-        "сравнить цену не с чем. Требуется ручная проверка обоснованности."
-    ),
-    "deviation_20": (
-        "Цена отклоняется от средней более чем на 20%. "
-        "Возможно завышение стоимости или ошибка в данных."
-    ),
-    "deviation_50": (
-        "Цена отклоняется от средней более чем на 50% — критическое отклонение. "
-        "Необходима проверка поставщика и условий договора."
-    ),
-    "high_spread": (
-        "Сильный разброс цен между документами. "
-        "Разные подразделения закупают по существенно разным ценам — "
-        "возможна манипуляция или отсутствие единого поставщика."
-    ),
-    "small_sample": (
-        "Малая выборка — менее 3 цен. "
-        "Недостаточно данных для объективной оценки."
-    ),
-    "duplicate": (
-        "Одинаковая позиция закупается несколькими отделами — "
-        "возможно дублирование закупки через разных поставщиков."
-    ),
-    "split": (
-        "Закупка разбита на несколько мелких операций, "
-        "что может скрывать общий объём и обходить лимиты согласования."
-    ),
-    "contractor_concentration": (
-        "Один контрагент доминирует в закупках — "
-        "высокая концентрация может указывать на аффилированность."
-    ),
-    "distance_anomaly": (
-        "Заявленное расстояние значительно превышает типичное. "
-        "Возможно завышение транспортных расходов."
-    ),
-    "volume_anomaly": (
-        "Объём закупки значительно превышает типичный для этой позиции. "
-        "Рекомендуется проверить реальную потребность."
-    ),
+# Маппинг флага → текст объяснения
+FLAG_TEXTS = {
+    "multi_department":          "Одинаковая позиция закупается в 3+ подразделениях одновременно",
+    "two_department":            "Одинаковая позиция закупается в 2 подразделениях",
+    "no_match":                  "Позиция встречается только в одном документе — сравнение невозможно",
+    "deviation_20":              "Цена отклоняется от средней более чем на 20%",
+    "deviation_50":              "Цена отклоняется от средней более чем на 50% — критическое отклонение",
+    "high_spread":               "Сильный разброс цен между документами",
+    "small_sample":              "Малая выборка — менее 3 цен для сравнения",
+    "duplicate":                 "Дублирующая закупка — та же позиция уже закупалась",
+    "split":                     "Закупка разбита на несколько мелких частей",
+    "contractor_concentration":  "Один контрагент используется слишком часто",
+    "distance_anomaly":          "Заявленное расстояние значительно превышает типичное",
+    "volume_anomaly":            "Объём закупки значительно превышает типичный",
+}
+
+# Ключевые слова в reasons → флаг (для матчинга из scorer)
+REASON_TO_FLAG = {
+    "multi_department":         ["3+ подразделениях", "multi_department"],
+    "two_department":           ["2 подразделениях",  "two_department"],
+    "no_match":                 ["не найдена",        "no_match"],
+    "deviation_20":             ["20%",               "deviation_20", "отклонение цены > 20"],
+    "deviation_50":             ["50%",               "deviation_50", "отклонение цены > 50"],
+    "high_spread":              ["разброс",           "high_spread", "cv"],
+    "small_sample":             ["малая выборка",     "small_sample", "менее 3"],
+    "duplicate":                ["дублир",            "duplicate"],
+    "split":                    ["разбит",            "split", "дробление"],
+    "contractor_concentration": ["контрагент",        "contractor_concentration"],
+    "distance_anomaly":         ["расстояние",        "distance"],
+    "volume_anomaly":           ["объём",             "volume"],
 }
 
 
+def _flags_from_reasons(reasons: list[str]) -> list[str]:
+    """Определяет флаги из списка reasons scorer'а."""
+    flags = []
+    for reason in reasons:
+        r_lower = reason.lower()
+        for flag, keywords in REASON_TO_FLAG.items():
+            if any(kw.lower() in r_lower for kw in keywords):
+                if flag not in flags:
+                    flags.append(flag)
+    return flags
+
+
 def explain(result: ScoreResult, extra_flags: list[str] | None = None) -> str:
-    parts = []
+    """
+    Формирует объяснение из флагов scorer + дополнительных флагов rule_engine.
+    Никакого AI — только правила.
+    """
+    flags = _flags_from_reasons(result.reasons)
+    for f in (extra_flags or []):
+        if f not in flags:
+            flags.append(f)
 
-    # Маппинг ключевых слов из reasons → шаблон
-    REASON_KEYWORDS = {
-        "no_match":                  ["no_match", "нет совпадений", "одном документе"],
-        "deviation_20":              ["deviation_20", "отклонение", "20%"],
-        "deviation_50":              ["deviation_50", "50%", "критическое"],
-        "high_spread":               ["high_spread", "разброс", "spread"],
-        "small_sample":              ["small_sample", "малая выборка", "мало данных"],
-        "duplicate":                 ["duplicate", "дублир"],
-        "split":                     ["split", "дробление"],
-        "contractor_concentration":  ["contractor_concentration", "концентрация", "один контрагент"],
-        "distance_anomaly":          ["distance_anomaly", "расстояние"],
-        "volume_anomaly":            ["volume_anomaly", "объём", "объем"],
-    }
-
-    for reason in result.reasons:
-        reason_lower = reason.lower()
-        for key, keywords in REASON_KEYWORDS.items():
-            if any(kw in reason_lower for kw in keywords):
-                text = TEMPLATES.get(key, "")
-                if text and text not in parts:
-                    parts.append(text)
-
-    for flag_type in (extra_flags or []):
-        if flag_type in TEMPLATES:
-            text = TEMPLATES[flag_type]
-            if text not in parts:
-                parts.append(text)
+    parts = [FLAG_TEXTS[f] for f in flags if f in FLAG_TEXTS]
 
     if not parts:
-        return "Значительных аномалий не обнаружено."
+        return "Аномалий не обнаружено."
 
-    return " ".join(parts)
+    return " | ".join(parts)
 
 
 def explain_all(
@@ -97,6 +78,7 @@ def explain_all(
             "name":        r.name,
             "score":       r.score,
             "risk_level":  r.risk_level,
+            "flags":       _flags_from_reasons(r.reasons) + extra,
             "explanation": explain(r, extra),
         })
     return output
