@@ -1,163 +1,114 @@
 # backend/pipeline/analyzer.py
 
 import statistics
-
-
-def calculate_deviation(value: float, reference: float) -> float:
-    """
-    Считает отклонение значения от эталона в процентах.
-    Например: эталон 100, значение 120 → отклонение +20%
-    """
-    if reference == 0:
-        return 0.0
-    return round(((value - reference) / reference) * 100, 2)
+from backend.pipeline.scorer import score_item, get_risk_level
 
 
 def calculate_spread(prices: list[float]) -> dict:
-    """
-    Считает разброс цен внутри группы.
-    Возвращает: мин, макс, среднее, стандартное отклонение.
-    """
-    if not prices:
+    clean = [p for p in prices if p > 0]
+    if not clean:
         return {"min": 0, "max": 0, "mean": 0, "std": 0}
-
-    prices_clean = [p for p in prices if p > 0]
-
-    if not prices_clean:
-        return {"min": 0, "max": 0, "mean": 0, "std": 0}
-
-    mean = round(statistics.mean(prices_clean), 2)
-    std = round(statistics.stdev(prices_clean), 2) if len(prices_clean) > 1 else 0.0
-
-    return {
-        "min": round(min(prices_clean), 2),
-        "max": round(max(prices_clean), 2),
-        "mean": mean,
-        "std": std
-    }
-
-
-def find_reference_price(items: list[dict]) -> float:
-    """
-    Определяет эталонную цену для группы.
-
-    Логика:
-    1. Если есть документ типа "смета" — берём цену оттуда
-    2. Если нет — берём среднее по всем ценам в группе
-    """
-    # Ищем позицию из сметы
-    for item in items:
-        source = item.get("source", "").lower()
-        if any(word in source for word in ["смета", "estimate", "budget"]):
-            price = item.get("price", 0)
-            if price > 0:
-                return price
-
-    # Если сметы нет — считаем среднее
-    prices = [item.get("price", 0) for item in items if item.get("price", 0) > 0]
-
-    if not prices:
-        return 0.0
-
-    return round(statistics.mean(prices), 2)
+    mean = round(statistics.mean(clean), 2)
+    std  = round(statistics.stdev(clean), 2) if len(clean) > 1 else 0.0
+    return {"min": round(min(clean), 2), "max": round(max(clean), 2), "mean": mean, "std": std}
 
 
 def analyze_group(group: dict) -> dict:
-    """
-    Анализирует одну группу позиций.
-
-    Для каждой позиции считает:
-    - отклонение цены от эталона
-    - флаг аномалии (если отклонение > 20%)
-
-    Возвращает обогащённую группу с полем 'analysis'.
-    """
     items = group.get("items", [])
-
     if not items:
-        return {**group, "analysis": {"error": "Нет позиций для анализа"}}
+        return {**group, "analysis": {"error": "Нет позиций"}, "aggregated": None}
 
-    # Получаем все цены
-    prices = [item.get("price", 0) for item in items]
-
-    # Считаем разброс
+    prices = [float(i.get("price", 0) or 0) for i in items]
     spread = calculate_spread(prices)
 
-    # Определяем эталонную цену
-    reference_price = find_reference_price(items)
+    scored_items = [score_item(item, group) for item in items]
 
-    # Анализируем каждую позицию
-    analyzed_items = []
-    anomalies = []
+    # Агрегация
+    all_flags   = []
+    departments = []
+    contractors = []
+    seen_d, seen_c = set(), set()
 
-    for item in items:
-        price = item.get("price", 0)
-        deviation = calculate_deviation(price, reference_price) if reference_price > 0 else 0.0
+    for s in scored_items:
+        for f in s["flags"]:
+            if f not in all_flags:
+                all_flags.append(f)
+        d, c = s.get("department", ""), s.get("contractor", "")
+        if d and d not in seen_d: seen_d.add(d); departments.append(d)
+        if c and c not in seen_c: seen_c.add(c); contractors.append(c)
 
-        # Аномалия если отклонение больше 20%
-        is_anomaly = abs(deviation) > 20 and price > 0 and reference_price > 0
+    max_score  = max(s["score"] for s in scored_items)
+    risk_level = get_risk_level(max_score)
 
-        analyzed_item = {
-            **item,
-            "deviation_pct": deviation,
-            "is_anomaly": is_anomaly
-        }
+    # Фактическое объяснение
+    parts = []
+    if "duplicate_3_plus" in all_flags:
+        parts.append(f"Закупается в {len(departments)} отделах: {', '.join(departments[:5])}")
+    elif "duplicate_2" in all_flags:
+        parts.append(f"Закупается в 2 отделах: {', '.join(departments)}")
+    if "vague_item" in all_flags:
+        parts.append("Размытая формулировка позиции")
+    if "price_deviation_50" in all_flags:
+        parts.append(f"Отклонение цены >50% (мин {spread['min']:,.0f} / макс {spread['max']:,.0f})")
+    elif "price_deviation_20" in all_flags:
+        parts.append(f"Отклонение цены >20% (мин {spread['min']:,.0f} / макс {spread['max']:,.0f})")
+    if "split_suspected" in all_flags:
+        parts.append(f"Возможное дробление — {len(items)} записей")
+    if "single_occurrence" in all_flags:
+        parts.append("Единственное упоминание")
 
-        analyzed_items.append(analyzed_item)
+    explanation = " | ".join(parts) if parts else "Без явных аномалий"
 
-        if is_anomaly:
-            anomalies.append({
-                "source": item.get("source", ""),
-                "price": price,
-                "deviation_pct": deviation
-            })
+    aggregated = {
+        "item":        group.get("canonical_name", items[0].get("name", "")),
+        "name":        group.get("canonical_name", items[0].get("name", "")),
+        "departments": departments,
+        "contractors": contractors,
+        "count":       len(items),
+        "prices":      [p for p in prices if p > 0],
+        "spread":      spread,
+        "score":       max_score,
+        "risk_level":  risk_level,
+        "flags":       all_flags,
+        "explanation": explanation,
+    }
 
     return {
         **group,
-        "items": analyzed_items,
+        "items":      scored_items,
+        "aggregated": aggregated,
         "analysis": {
-            "reference_price": reference_price,
-            "spread": spread,
-            "anomaly_count": len(anomalies),
-            "anomalies": anomalies,
-            "has_anomalies": len(anomalies) > 0
+            "spread":        spread,
+            "has_anomalies": max_score >= 20,
+            "anomaly_count": sum(1 for s in scored_items if s["score"] >= 20),
         }
     }
 
 
 def analyze_all_groups(groups: list[dict]) -> dict:
-    """
-    Анализирует все группы и возвращает общий отчёт.
-    """
     if not groups:
         return {
-            "groups": [],
-            "total_groups": 0,
-            "total_anomalies": 0,
-            "summary": "Нет данных для анализа"
+            "groups": [], "results": [], "flat_results": [],
+            "total_groups": 0, "total_anomalies": 0,
+            "summary": "Нет данных для анализа",
         }
 
-    analyzed = [analyze_group(group) for group in groups]
+    analyzed = [analyze_group(g) for g in groups]
 
-    total_anomalies = sum(
-        g.get("analysis", {}).get("anomaly_count", 0)
-        for g in analyzed
+    flat_results       = [item for g in analyzed for item in g.get("items", [])]
+    aggregated_results = sorted(
+        [g["aggregated"] for g in analyzed if g.get("aggregated")],
+        key=lambda x: x["score"], reverse=True
     )
 
-    # Группы с аномалиями
-    groups_with_anomalies = [
-        g["canonical_name"]
-        for g in analyzed
-        if g.get("analysis", {}).get("has_anomalies", False)
-    ]
+    total_anomalies = sum(1 for r in aggregated_results if r["score"] >= 20)
 
     return {
-        "groups": analyzed,
-        "total_groups": len(analyzed),
+        "groups":          analyzed,
+        "results":         aggregated_results,
+        "flat_results":    flat_results,
+        "total_groups":    len(analyzed),
         "total_anomalies": total_anomalies,
-        "groups_with_anomalies": groups_with_anomalies,
-        "summary": (
-            f"Проанализировано {len(analyzed)} групп. "
-            f"Найдено аномалий: {total_anomalies}."
-        )
+        "groups_with_anomalies": [r["item"] for r in aggregated_results if r["score"] >= 20],
+        "summary": f"Проанализировано {len(analyzed)} позиций. Аномалий: {total_anomalies}.",
     }

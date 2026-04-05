@@ -1,218 +1,268 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Анализатор документов</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap');
 
     :root {
       --bg:      #0d0f14; --bg2: #13161e; --bg3: #1a1e2a;
       --border:  #252a38; --accent: #4f8ef7; --accent2: #7c5af7;
       --green:   #3dd68c; --orange: #f7a24f; --red: #f75a5a;
       --purple:  #b45af7; --text: #e8eaf2; --muted: #6b7280;
-      --font:    'Syne', sans-serif; --mono: 'JetBrains Mono', monospace;
+      --font:    'Inter', sans-serif; --mono: 'JetBrains Mono', monospace;
+      --radius:  6px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: var(--font); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    body { background: var(--bg); color: var(--text); font-family: var(--font); height: 100vh; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; }
 
-    header { padding: 14px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--bg2); -webkit-app-region: drag; }
-    header .logo { width: 28px; height: 28px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: 8px; }
-    header h1 { font-size: 15px; font-weight: 800; }
+    /* Header */
+    header { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; background: var(--bg2); -webkit-app-region: drag; }
+    header .logo { width: 26px; height: 26px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: var(--radius); flex-shrink: 0; }
+    header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.3px; }
     header .status { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
-    header .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    header .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
     .layout { display: flex; flex: 1; overflow: hidden; }
 
-    .sidebar { width: 300px; border-right: 1px solid var(--border); background: var(--bg2); display: flex; flex-direction: column; padding: 20px; gap: 20px; overflow-y: auto; }
-    .section-label { font-size: 10px; font-weight: 600; letter-spacing: 1.5px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; }
+    /* Sidebar */
+    .sidebar { width: 280px; border-right: 1px solid var(--border); background: var(--bg2); display: flex; flex-direction: column; padding: 16px; gap: 16px; overflow-y: auto; }
+    .section-label { font-size: 10px; font-weight: 600; letter-spacing: 1.2px; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
 
-    .drop-zone { border: 2px dashed var(--border); border-radius: 12px; padding: 24px 16px; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--bg3); }
+    .drop-zone { border: 1px dashed var(--border); border-radius: var(--radius); padding: 20px 14px; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--bg3); }
     .drop-zone:hover, .drop-zone.active { border-color: var(--accent); background: rgba(79,142,247,0.05); }
-    .drop-zone .icon { font-size: 28px; margin-bottom: 8px; }
-    .drop-zone p { font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .drop-zone .icon { font-size: 24px; margin-bottom: 6px; }
+    .drop-zone p { font-size: 11px; color: var(--muted); line-height: 1.5; }
     .drop-zone span { color: var(--accent); font-weight: 600; }
     #file-input { display: none; }
 
-    .file-list { display: flex; flex-direction: column; gap: 6px; }
-    .file-item { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; animation: fadeIn 0.2s ease; }
-    @keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
-    .file-item .file-icon { font-size: 16px; }
-    .file-item .file-name { flex: 1; color: var(--text); font-family: var(--mono); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .file-item .file-remove { cursor: pointer; color: var(--muted); font-size: 14px; transition: color 0.15s; }
-    .file-item .file-remove:hover { color: var(--red); }
+    .file-list { display: flex; flex-direction: column; gap: 5px; }
+    .file-item { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; display: flex; align-items: center; gap: 8px; font-size: 11px; }
+    .file-icon { font-size: 14px; }
+    .file-name { flex: 1; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .file-remove { cursor: pointer; color: var(--muted); font-size: 12px; }
+    .file-remove:hover { color: var(--red); }
 
-    .btn { width: 100%; padding: 11px 16px; border: none; border-radius: 10px; font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .btn { width: 100%; padding: 9px 14px; border: none; border-radius: var(--radius); font-family: var(--font); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
     .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: white; }
-    .btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
-    .btn-primary:active { transform: translateY(0); }
-    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-    .btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-secondary { background: var(--bg3); color: var(--muted); border: 1px solid var(--border); }
     .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
 
-    .progress-bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; display: none; }
+    .progress-bar { height: 2px; background: var(--border); border-radius: 2px; overflow: hidden; display: none; }
     .progress-bar.active { display: block; }
-    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 2px; transition: width 0.3s ease; width: 0%; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.3s; width: 0%; }
 
+    /* Main */
     .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg2); padding: 0 20px; }
-    .tab { padding: 12px 18px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg2); padding: 0 16px; }
+    .tab { padding: 10px 16px; font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
     .tab:hover { color: var(--text); }
     .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-    .tab-content { flex: 1; overflow: auto; padding: 24px; display: none; }
-    .tab-content.active { display: flex; flex-direction: column; }
-
-    /* Graph */
+    .tab-content { flex: 1; overflow: auto; padding: 16px; display: none; flex-direction: column; }
+    .tab-content.active { display: flex; }
     #tab-graph { padding: 0 !important; position: relative; overflow: hidden; }
     #cy { width: 100%; height: 100%; background: var(--bg); display: none; }
 
-    .graph-legend {
-      position: absolute; top: 16px; right: 16px;
-      background: rgba(19,22,30,0.92); border: 1px solid var(--border);
-      border-radius: 10px; padding: 12px 16px; font-size: 11px;
-      display: none; flex-direction: column; gap: 7px; z-index: 10;
-      backdrop-filter: blur(6px);
-    }
-    .legend-title { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 1px; margin-bottom: 4px; }
-    .legend-item { display: flex; align-items: center; gap: 8px; }
-    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    /* Filters */
+    .filters { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-shrink: 0; }
+    .filters span { font-size: 11px; color: var(--muted); font-weight: 600; }
+    .filter-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg3); color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s; font-family: var(--mono); }
+    .filter-btn:hover { border-color: var(--accent); color: var(--text); }
+    .filter-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
+    .filter-btn[data-risk="CRITICAL"].active { background: var(--purple); border-color: var(--purple); }
+    .filter-btn[data-risk="HIGH"].active     { background: var(--red);    border-color: var(--red); }
+    .filter-btn[data-risk="MEDIUM"].active   { background: var(--orange); border-color: var(--orange); }
+    .filter-btn[data-risk="LOW"].active      { background: var(--green);  border-color: var(--green); color: #000; }
 
-    .graph-controls {
-      position: absolute; bottom: 16px; right: 16px;
-      display: none; gap: 8px; z-index: 10;
-    }
-    .graph-btn { background: rgba(19,22,30,0.92); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer; transition: all 0.15s; backdrop-filter: blur(6px); }
-    .graph-btn:hover { border-color: var(--accent); color: var(--accent); }
+    /* Table */
+    .table-wrap { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+    .results-table { width: 100%; border-collapse: collapse; }
 
-    /* Node tooltip */
-    .cy-tooltip {
-      position: absolute; background: var(--bg2); border: 1px solid var(--border);
-      border-radius: 8px; padding: 8px 12px; font-size: 12px;
-      pointer-events: none; display: none; z-index: 20; max-width: 240px; line-height: 1.5;
-    }
+    .results-table thead { position: sticky; top: 0; background: var(--bg2); z-index: 2; }
+    .results-table th { padding: 8px 12px; font-size: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--muted); text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
 
-    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--muted); }
-    .empty-state .big-icon { font-size: 48px; opacity: 0.4; }
-    .empty-state p { font-size: 13px; }
+    .th-sort { cursor: pointer; user-select: none; }
+    .th-sort:hover { color: var(--text); }
+    .th-sort.desc::after { content: ' ↓'; color: var(--accent); }
+    .th-sort.asc::after  { content: ' ↑'; color: var(--accent); }
 
-    .results-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .results-table th { text-align: left; padding: 10px 14px; font-size: 10px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); }
-    .results-table td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
-    .results-table tr:hover td { background: var(--bg3); }
+    .results-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    .results-table tr:last-child td { border-bottom: none; }
+    .results-table tr:hover td { background: rgba(79,142,247,0.04); }
+    .row-critical td { background: rgba(180,90,247,0.05) !important; }
+    .row-critical:hover td { background: rgba(180,90,247,0.09) !important; }
 
-    .badge { display: inline-block; padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 600; font-family: var(--mono); }
+    .item-name  { font-weight: 600; font-size: 12px; }
+    .item-depts { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
+    .td-score   { width: 130px; }
+    .td-level   { width: 90px; }
+
+    .score-bar  { display: flex; align-items: center; gap: 8px; }
+    .score-track { flex: 1; min-width: 0; height: 5px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden; }
+    .score-fill { height: 100%; border-radius: 3px; }
+    .score-num  { font-family: var(--mono); font-size: 12px; font-weight: 600; width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; font-family: var(--mono); letter-spacing: 0.5px; }
     .badge-LOW      { background: rgba(61,214,140,0.15); color: var(--green); }
     .badge-MEDIUM   { background: rgba(247,162,79,0.15); color: var(--orange); }
     .badge-HIGH     { background: rgba(247,90,90,0.15);  color: var(--red); }
     .badge-CRITICAL { background: rgba(180,90,247,0.15); color: var(--purple); }
 
-    .score-bar { display: flex; align-items: center; gap: 8px; }
-    .score-track { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
-    .score-fill { height: 100%; border-radius: 3px; }
-    .score-num { font-family: var(--mono); font-size: 12px; font-weight: 600; min-width: 32px; }
-    .explanation { font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 420px; }
+    .explanation { font-size: 11px; color: var(--muted); line-height: 1.5; }
 
-    .json-output { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 20px; font-family: var(--mono); font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; overflow: auto; color: #a8b4c8; flex: 1; }
+    /* Empty state */
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; color: var(--muted); }
+    .empty-state .big-icon { font-size: 40px; opacity: 0.35; }
+    .empty-state p { font-size: 12px; }
 
-    .toast { position: fixed; bottom: 24px; right: 24px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 18px; font-size: 13px; display: flex; align-items: center; gap: 10px; transform: translateY(80px); opacity: 0; transition: all 0.3s ease; z-index: 100; max-width: 320px; }
+    /* Graph */
+    .graph-legend { position: absolute; top: 14px; right: 14px; background: rgba(19,22,30,0.92); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; font-size: 11px; display: none; flex-direction: column; gap: 6px; z-index: 10; }
+    .legend-title { font-size: 9px; font-weight: 700; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 2px; }
+    .legend-item { display: flex; align-items: center; gap: 7px; }
+    .legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+    .graph-controls { position: absolute; bottom: 14px; right: 14px; display: none; gap: 6px; z-index: 10; }
+    .graph-btn { background: rgba(19,22,30,0.92); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 6px 11px; font-size: 12px; cursor: pointer; }
+    .graph-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .cy-tooltip { position: absolute; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 11px; font-size: 11px; pointer-events: none; display: none; z-index: 20; max-width: 240px; line-height: 1.5; }
+
+    .json-output { flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; font-family: var(--mono); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; overflow: auto; color: #a8b4c8; }
+
+    .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 16px; font-size: 12px; display: flex; align-items: center; gap: 8px; transform: translateY(60px); opacity: 0; transition: all 0.25s; z-index: 100; max-width: 360px; }
     .toast.show { transform: translateY(0); opacity: 1; }
-    .toast.error { border-color: var(--red); }
+    .toast.error   { border-color: var(--red); }
     .toast.success { border-color: var(--green); }
   </style>
 </head>
 <body>
 
-  <header>
-    <div class="logo"></div>
-    <h1>Анализатор документов</h1>
-    <div class="status">
-      <div class="dot"></div>
-      <span>backend: localhost:8000</span>
-    </div>
-  </header>
-
-  <div class="layout">
-    <aside class="sidebar">
-      <div>
-        <div class="section-label">Документы</div>
-        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
-          <div class="icon">📂</div>
-          <p><span>Выбери файлы</span> или перетащи<br>PDF, DOCX, XLSX</p>
-        </div>
-        <input type="file" id="file-input" multiple accept=".pdf,.docx,.xlsx" />
-      </div>
-
-      <div id="file-list-section" style="display:none">
-        <div class="section-label">Загружено <span id="file-count">0</span> файлов</div>
-        <div class="file-list" id="file-list"></div>
-      </div>
-
-      <div class="progress-bar" id="progress-bar">
-        <div class="progress-fill" id="progress-fill"></div>
-      </div>
-
-      <button class="btn btn-primary" id="btn-analyze" disabled onclick="runAnalyze()">⚡ Запустить анализ</button>
-      <button class="btn btn-secondary" onclick="clearAll()">Очистить всё</button>
-    </aside>
-
-    <main class="main">
-      <div class="tabs">
-        <div class="tab active" onclick="switchTab('results', this)">Результаты</div>
-        <div class="tab" onclick="switchTab('graph', this)">Граф</div>
-        <div class="tab" onclick="switchTab('raw', this)">Raw JSON</div>
-      </div>
-
-      <!-- Результаты -->
-      <div class="tab-content active" id="tab-results">
-        <div class="empty-state" id="empty-results" style="flex:1">
-          <div class="big-icon">🔍</div><p>Загрузи файлы и запусти анализ</p>
-        </div>
-        <table class="results-table" id="results-table" style="display:none">
-          <thead><tr><th>Позиция</th><th>Риск-скор</th><th>Уровень</th><th>Объяснение</th></tr></thead>
-          <tbody id="results-body"></tbody>
-        </table>
-      </div>
-
-      <!-- Граф -->
-      <div class="tab-content" id="tab-graph">
-        <div class="empty-state" id="empty-graph" style="flex:1">
-          <div class="big-icon">🕸️</div><p>Граф появится после анализа</p>
-        </div>
-        <div id="cy"></div>
-        <div class="graph-legend" id="graph-legend">
-          <div class="legend-title">ЛЕГЕНДА</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#2196f3"></div>Подразделение</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#009688"></div>Контрагент</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#3dd68c"></div>LOW риск</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#f7a24f"></div>MEDIUM риск</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#f75a5a"></div>HIGH риск</div>
-          <div class="legend-item"><div class="legend-dot" style="background:#b45af7"></div>CRITICAL риск</div>
-        </div>
-        <div class="graph-controls" id="graph-controls">
-          <button class="graph-btn" onclick="fitGraph()">⊡ Всё</button>
-          <button class="graph-btn" onclick="zoomGraph(1.2)">＋</button>
-          <button class="graph-btn" onclick="zoomGraph(0.8)">－</button>
-        </div>
-        <div class="cy-tooltip" id="cy-tooltip"></div>
-      </div>
-
-      <!-- Raw JSON -->
-      <div class="tab-content" id="tab-raw">
-        <div class="empty-state" id="empty-raw" style="flex:1">
-          <div class="big-icon">{ }</div><p>Raw JSON появится после анализа</p>
-        </div>
-        <div class="json-output" id="raw-output" style="display:none"></div>
-      </div>
-    </main>
+<header>
+  <div class="logo"></div>
+  <h1>Анализатор документов</h1>
+  <div class="status">
+    <div class="dot"></div>
+    <span>localhost:8000</span>
   </div>
+</header>
 
-  <div class="toast" id="toast"></div>
-  <script src="renderer.js"></script>
+<div class="layout">
+  <aside class="sidebar">
+    <div>
+      <div class="section-label">Документы</div>
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="icon">📂</div>
+        <p><span>Выбери файлы</span> или перетащи<br>PDF · DOCX · XLSX</p>
+      </div>
+      <input type="file" id="file-input" multiple accept=".pdf,.docx,.xlsx"/>
+    </div>
+
+    <div id="file-list-section" style="display:none">
+      <div class="section-label">Загружено <span id="file-count">0</span> файлов</div>
+      <div class="file-list" id="file-list"></div>
+    </div>
+
+    <div class="progress-bar" id="progress-bar">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+
+    <button class="btn btn-primary" id="btn-analyze" disabled onclick="runAnalyze()">⚡ Запустить анализ</button>
+    <button class="btn btn-secondary" onclick="clearAll()">Очистить</button>
+  </aside>
+
+  <main class="main">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('results', this)">Результаты</div>
+      <div class="tab" onclick="switchTab('graph', this)">Граф</div>
+      <div class="tab" onclick="switchTab('raw', this)">Raw JSON</div>
+    </div>
+
+    <!-- Результаты -->
+    <div class="tab-content active" id="tab-results">
+      <div class="empty-state" id="empty-results" style="flex:1">
+        <div class="big-icon">🔍</div><p>Загрузи файлы и запусти анализ</p>
+      </div>
+
+      <div id="results-content" style="display:none; flex-direction:column; flex:1; overflow:hidden">
+        <!-- Фильтры -->
+        <div class="filters">
+          <span>ФИЛЬТР:</span>
+          <button class="filter-btn active" data-risk="ALL"      onclick="setFilter('ALL')">Все</button>
+          <button class="filter-btn"        data-risk="CRITICAL" onclick="setFilter('CRITICAL')">CRITICAL</button>
+          <button class="filter-btn"        data-risk="HIGH"     onclick="setFilter('HIGH')">HIGH</button>
+          <button class="filter-btn"        data-risk="MEDIUM"   onclick="setFilter('MEDIUM')">MEDIUM</button>
+          <button class="filter-btn"        data-risk="LOW"      onclick="setFilter('LOW')">LOW</button>
+        </div>
+
+        <!-- Таблица -->
+        <div class="table-wrap">
+          <table class="results-table" id="results-table">
+            <thead>
+              <tr>
+                <th class="th-sort" data-col="name" onclick="sortBy('name')">Позиция</th>
+                <th class="th-sort td-score desc" data-col="score" onclick="sortBy('score')">Скор</th>
+                <th class="th-sort td-level" data-col="risk_level" onclick="sortBy('risk_level')">Риск</th>
+                <th>Объяснение</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Граф -->
+    <div class="tab-content" id="tab-graph">
+      <div class="empty-state" id="empty-graph" style="flex:1">
+        <div class="big-icon">🕸️</div><p>Граф появится после анализа</p>
+      </div>
+      <div id="cy"></div>
+      <div class="graph-legend" id="graph-legend">
+        <div class="legend-title">Легенда</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#2196f3"></div>Подразделение</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#009688"></div>Контрагент</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#3dd68c"></div>LOW</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f7a24f"></div>MEDIUM</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f75a5a"></div>HIGH</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#9c27b0"></div>CRITICAL</div>
+      </div>
+      <div class="graph-controls" id="graph-controls">
+        <button class="graph-btn" onclick="fitGraph()">⊡ Всё</button>
+        <button class="graph-btn" onclick="zoomGraph(1.2)">＋</button>
+        <button class="graph-btn" onclick="zoomGraph(0.8)">－</button>
+      </div>
+      <div class="cy-tooltip" id="cy-tooltip"></div>
+    </div>
+
+    <!-- Raw JSON -->
+    <div class="tab-content" id="tab-raw">
+      <div class="empty-state" id="empty-raw" style="flex:1">
+        <div class="big-icon">{ }</div><p>Raw JSON появится после анализа</p>
+      </div>
+      <div class="json-output" id="raw-output" style="display:none"></div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="renderer.js"></script>
+<script>
+  // Показываем results-content когда данные есть
+  const _orig = window.renderResults
+  window.renderResults = function() {
+    _orig()
+    document.getElementById('empty-results').style.display  = 'none'
+    document.getElementById('results-content').style.display = 'flex'
+  }
+</script>
 </body>
 </html>

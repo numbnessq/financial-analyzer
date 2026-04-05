@@ -1,8 +1,12 @@
 // frontend/renderer.js
 
 const API = 'http://localhost:8000'
-let selectedFiles = []
-let cyInstance    = null
+let selectedFiles  = []
+let cyInstance     = null
+let allResults     = []
+let sortCol        = 'score'
+let sortDir        = -1   // -1 = desc
+let filterRisk     = 'ALL'
 
 
 // ─── Файлы ────────────────────────────────────
@@ -50,9 +54,8 @@ function renderFileList() {
 function removeFile(i) { selectedFiles.splice(i, 1); renderFileList() }
 
 function clearAll() {
-  selectedFiles = []
-  renderFileList()
-  resetResults()
+  selectedFiles = []; allResults = []
+  renderFileList(); resetResults()
   document.getElementById('file-input').value = ''
   if (cyInstance) { cyInstance.destroy(); cyInstance = null }
 }
@@ -76,11 +79,12 @@ async function runAnalyze() {
     const uploadData = await uploadRes.json()
     setProgress(45)
 
-    const documents = uploadData.files.map(f => ({
-      filename:   f.original_name,
-      department: 'Основной отдел',
-      contractor: '',          // ← пустой, не "Не указан"
-      items:      f.items || []
+    const documents = (uploadData.files || []).map(f => ({
+      filename:   f.original_name || '',
+      department: f.detected_department || '',
+      contractor: f.contractor || '',
+      source_file: f.original_name || '',
+      items: f.items || []
     }))
 
     const analyzeRes = await fetch(`${API}/analyze`, {
@@ -96,10 +100,11 @@ async function runAnalyze() {
     const graphData   = await graphRes.json()
     setProgress(100)
 
-    renderResults(resultsData.results)
+    allResults = resultsData.results || []
+    renderResults()
     renderGraph(graphData)
     renderRaw({ results: resultsData, graph: graphData })
-    showToast('✅ Анализ завершён', 'success')
+    showToast(`✅ Готово — ${allResults.length} позиций, аномалий: ${allResults.filter(r => r.score >= 20).length}`, 'success')
 
   } catch (err) {
     showToast(`❌ ${err.message}`, 'error')
@@ -111,27 +116,67 @@ async function runAnalyze() {
 }
 
 
-// ─── Таблица результатов ──────────────────────
+// ─── Таблица: сортировка и фильтр ─────────────
 
-function renderResults(results) {
-  if (!results?.length) return
-  const body  = document.getElementById('results-body')
+function setFilter(risk) {
+  filterRisk = risk
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'))
+  document.querySelector(`[data-risk="${risk}"]`).classList.add('active')
+  renderResults()
+}
+
+function sortBy(col) {
+  if (sortCol === col) sortDir *= -1
+  else { sortCol = col; sortDir = -1 }
+  document.querySelectorAll('.th-sort').forEach(th => {
+    th.classList.remove('asc', 'desc')
+    if (th.dataset.col === col) th.classList.add(sortDir === -1 ? 'desc' : 'asc')
+  })
+  renderResults()
+}
+
+function renderResults() {
+  if (!allResults.length) return
+
   const table = document.getElementById('results-table')
   const empty = document.getElementById('empty-results')
-  const colors = { LOW: '#3dd68c', MEDIUM: '#f7a24f', HIGH: '#f75a5a', CRITICAL: '#b45af7' }
+  const body  = document.getElementById('results-body')
 
-  body.innerHTML = results.map(r => {
-    const color = colors[r.risk_level] || '#6b7280'
-    return `<tr>
-      <td><strong>${r.name}</strong></td>
-      <td style="white-space:nowrap">
+  const RISK_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
+  const colors     = { LOW: '#3dd68c', MEDIUM: '#f7a24f', HIGH: '#f75a5a', CRITICAL: '#b45af7' }
+
+  let filtered = filterRisk === 'ALL'
+    ? [...allResults]
+    : allResults.filter(r => r.risk_level === filterRisk)
+
+  filtered.sort((a, b) => {
+    let av = a[sortCol], bv = b[sortCol]
+    if (sortCol === 'risk_level') { av = RISK_ORDER[av] ?? 9; bv = RISK_ORDER[bv] ?? 9 }
+    if (sortCol === 'name' || sortCol === 'item') { av = String(av || ''); bv = String(bv || '') }
+    return av < bv ? sortDir : av > bv ? -sortDir : 0
+  })
+
+  body.innerHTML = filtered.map(r => {
+    const color    = colors[r.risk_level] || '#6b7280'
+    const name     = r.item || r.name || '—'
+    const depts    = (r.departments || []).join(', ') || '—'
+    const isCrit   = r.risk_level === 'CRITICAL'
+
+    return `<tr class="${isCrit ? 'row-critical' : ''}">
+      <td class="td-name">
+        <div class="item-name">${name}</div>
+        <div class="item-depts">${depts}</div>
+      </td>
+      <td class="td-score" style="white-space:nowrap">
         <div class="score-bar">
           <div class="score-track"><div class="score-fill" style="width:${r.score}%;background:${color}"></div></div>
-          <span class="score-num" style="color:${color};font-family:monospace">${r.score}</span>
+          <span class="score-num" style="color:${color}">${r.score}</span>
         </div>
       </td>
-      <td style="white-space:nowrap"><span class="badge badge-${r.risk_level}">${r.risk_level}</span></td>
-      <td><div class="explanation">${r.explanation || '—'}</div></td>
+      <td class="td-level" style="white-space:nowrap">
+        <span class="badge badge-${r.risk_level}">${r.risk_level}</span>
+      </td>
+      <td class="td-explanation">${r.explanation || '—'}</td>
     </tr>`
   }).join('')
 
@@ -140,7 +185,7 @@ function renderResults(results) {
 }
 
 
-// ─── Граф — Cytoscape breadthfirst ───────────
+// ─── Граф (Cytoscape breadthfirst) ────────────
 
 function renderGraph(data) {
   const cyEl      = document.getElementById('cy')
@@ -157,157 +202,63 @@ function renderGraph(data) {
 
   if (cyInstance) cyInstance.destroy()
 
-  // Строим элементы — сортируем узлы чтобы departments шли первыми
-  const sortOrder = { department: 0, contractor: 1, item: 2 }
-  const sortedNodes = [...data.nodes].sort((a, b) =>
-    (sortOrder[a.type] ?? 3) - (sortOrder[b.type] ?? 3)
-  )
+  const sortOrder = { department: 0, item: 1, contractor: 2 }
+  const sorted    = [...data.nodes].sort((a, b) => (sortOrder[a.type] ?? 3) - (sortOrder[b.type] ?? 3))
 
   const elements = [
-    ...sortedNodes.map(n => ({
-      data: {
-        id:         n.id,
-        label:      n.label,
-        type:       n.type,
-        color:      n.color || '#607d8b',
-        risk_score: n.risk_score,
-        risk_level: n.risk_level,
-      }
-    })),
-    ...data.edges.map(e => ({
-      data: {
-        id:     `${e.source}__${e.target}`,
-        source: e.source,
-        target: e.target,
-        label:  e.label || '',
-        etype:  e.type  || '',
-        weight: e.weight || 1,
-      }
-    }))
+    ...sorted.map(n => ({ data: { id: n.id, label: n.label, type: n.type, color: n.color || '#607d8b',
+      risk_score: n.risk_score, risk_level: n.risk_level, departments: n.departments || [] } })),
+    ...data.edges.map(e => ({ data: { id: `${e.source}__${e.target}`, source: e.source,
+      target: e.target, etype: e.type || '', weight: e.weight || 1 } }))
   ]
 
   cyInstance = cytoscape({
-    container: cyEl,
-    elements,
-
+    container: cyEl, elements,
     style: [
-      // Базовый стиль всех узлов
-      {
-        selector: 'node',
-        style: {
-          'background-color': 'data(color)',
-          'label':            'data(label)',
-          'color':            '#e8eaf2',
-          'font-size':        '10px',
-          'font-family':      'JetBrains Mono, monospace',
-          'text-valign':      'bottom',
-          'text-halign':      'center',
-          'text-margin-y':    6,
-          'text-wrap':        'wrap',
-          'text-max-width':   '110px',
-          'border-width':     2,
-          'border-color':     'rgba(255,255,255,0.12)',
-        }
-      },
-      // Departments — круг, крупный, сверху
-      {
-        selector: 'node[type="department"]',
-        style: { shape: 'ellipse', width: 60, height: 60 }
-      },
-      // Items — прямоугольник, средний
-      {
-        selector: 'node[type="item"]',
-        style: { shape: 'round-rectangle', width: 50, height: 30 }
-      },
-      // Contractors — ромб, снизу
-      {
-        selector: 'node[type="contractor"]',
-        style: { shape: 'diamond', width: 48, height: 48 }
-      },
-      {
-        selector: 'node:selected',
-        style: { 'border-color': '#4f8ef7', 'border-width': 3 }
-      },
-      // Рёбра — видимые на тёмном фоне
-      {
-        selector: 'edge',
-        style: {
-          width:                1.5,
-          'line-color':         '#6b7280',
-          'target-arrow-color': '#6b7280',
-          'target-arrow-shape': 'triangle',
-          'arrow-scale':        0.9,
-          'curve-style':        'bezier',
-          opacity:              0.8,
-        }
-      },
-      // Связи "работает с" — синие
-      {
-        selector: 'edge[etype="works_with"]',
-        style: {
-          'line-color':         '#4f8ef7',
-          'target-arrow-color': '#4f8ef7',
-        }
-      },
-      // Связи "поставляет" — бирюзовые
-      {
-        selector: 'edge[etype="supplies"]',
-        style: {
-          'line-color':         '#009688',
-          'target-arrow-color': '#009688',
-        }
-      },
-      {
-        selector: 'edge:selected',
-        style: {
-          'line-color':         '#fff',
-          'target-arrow-color': '#fff',
-          opacity:              1,
-        }
-      },
+      { selector: 'node', style: {
+        'background-color': 'data(color)', 'label': 'data(label)',
+        'color': '#e8eaf2', 'font-size': '10px', 'font-family': 'JetBrains Mono, monospace',
+        'text-valign': 'bottom', 'text-halign': 'center', 'text-margin-y': 6,
+        'text-wrap': 'wrap', 'text-max-width': '120px',
+        'border-width': 2, 'border-color': 'rgba(255,255,255,0.1)',
+      }},
+      { selector: 'node[type="department"]', style: { shape: 'ellipse', width: 60, height: 60 }},
+      { selector: 'node[type="item"]',       style: { shape: 'round-rectangle', width: 56, height: 32 }},
+      { selector: 'node[type="contractor"]', style: { shape: 'diamond', width: 50, height: 50 }},
+      { selector: 'node:selected',           style: { 'border-color': '#4f8ef7', 'border-width': 3 }},
+      { selector: 'edge', style: {
+        width: 1.5, 'line-color': '#6b7280', 'target-arrow-color': '#6b7280',
+        'target-arrow-shape': 'triangle', 'arrow-scale': 0.9, 'curve-style': 'bezier', opacity: 0.8,
+      }},
+      { selector: 'edge[etype="supplies"]', style: {
+        'line-color': '#009688', 'target-arrow-color': '#009688',
+      }},
+      { selector: 'edge:selected', style: { 'line-color': '#fff', 'target-arrow-color': '#fff', opacity: 1 }},
     ],
-
-    // breadthfirst — детерминированный, иерархичный, сверху вниз
-    // departments → items → contractors
     layout: {
-      name:      'breadthfirst',
-      directed:  true,
-      padding:   40,
-      spacingFactor: 1.6,
-      animate:   true,
-      animationDuration: 500,
-      fit:       true,
-      // Корни — все department узлы
-      roots: data.nodes
-        .filter(n => n.type === 'department')
-        .map(n => n.id),
+      name: 'breadthfirst', directed: true, padding: 40, spacingFactor: 1.8,
+      animate: true, animationDuration: 500, fit: true,
+      roots: data.nodes.filter(n => n.type === 'department').map(n => n.id),
     },
-
-    wheelSensitivity: 0.3,
-    minZoom: 0.1,
-    maxZoom: 4,
+    wheelSensitivity: 0.3, minZoom: 0.1, maxZoom: 4,
   })
 
-  // Tooltip при наведении
   const tooltip = document.getElementById('cy-tooltip')
   cyInstance.on('mouseover', 'node', e => {
-    const d   = e.target.data()
-    const pos = e.renderedPosition
-    let html  = `<strong>${d.label}</strong><br>Тип: ${d.type}`
-    if (d.risk_score != null && d.type === 'item') {
+    const d = e.target.data(); const pos = e.renderedPosition
+    let html = `<strong>${d.label}</strong><br>Тип: ${d.type}`
+    if (d.type === 'item' && d.risk_score != null)
       html += `<br>Риск: <span style="color:${d.color}">${d.risk_score}/100 ${d.risk_level}</span>`
-    }
-    tooltip.innerHTML     = html
-    tooltip.style.display = 'block'
-    tooltip.style.left    = (pos.x + 14) + 'px'
-    tooltip.style.top     = (pos.y - 8)  + 'px'
+    if (d.departments?.length > 1)
+      html += `<br>Отделы: ${d.departments.join(', ')}`
+    tooltip.innerHTML = html; tooltip.style.display = 'block'
+    tooltip.style.left = (pos.x + 14) + 'px'; tooltip.style.top = (pos.y - 8) + 'px'
   })
   cyInstance.on('mouseout',  'node', () => tooltip.style.display = 'none')
   cyInstance.on('mousemove', e => {
     if (tooltip.style.display === 'block') {
       const p = e.renderedPosition
-      tooltip.style.left = (p.x + 14) + 'px'
-      tooltip.style.top  = (p.y - 8)  + 'px'
+      tooltip.style.left = (p.x + 14) + 'px'; tooltip.style.top = (p.y - 8) + 'px'
     }
   })
 }
@@ -315,21 +266,17 @@ function renderGraph(data) {
 function fitGraph()        { if (cyInstance) cyInstance.fit(undefined, 40) }
 function zoomGraph(factor) {
   if (!cyInstance) return
-  cyInstance.zoom({
-    level: cyInstance.zoom() * factor,
-    renderedPosition: { x: cyInstance.width() / 2, y: cyInstance.height() / 2 }
-  })
+  cyInstance.zoom({ level: cyInstance.zoom() * factor,
+    renderedPosition: { x: cyInstance.width() / 2, y: cyInstance.height() / 2 } })
 }
 
 
 // ─── Raw JSON ─────────────────────────────────
 
 function renderRaw(data) {
-  const out   = document.getElementById('raw-output')
-  const empty = document.getElementById('empty-raw')
-  out.textContent     = JSON.stringify(data, null, 2)
-  empty.style.display = 'none'
-  out.style.display   = 'block'
+  const out = document.getElementById('raw-output'); const empty = document.getElementById('empty-raw')
+  out.textContent = JSON.stringify(data, null, 2)
+  empty.style.display = 'none'; out.style.display = 'block'
 }
 
 function resetResults() {
@@ -349,14 +296,10 @@ function resetResults() {
 
 function switchTab(name, el) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
-  document.querySelectorAll('.tab-content').forEach(t => {
-    t.classList.remove('active')
-    t.style.display = 'none'
-  })
+  document.querySelectorAll('.tab-content').forEach(t => { t.classList.remove('active'); t.style.display = 'none' })
   el.classList.add('active')
   const tab = document.getElementById('tab-' + name)
-  tab.classList.add('active')
-  tab.style.display = 'flex'
+  tab.classList.add('active'); tab.style.display = 'flex'
   if (name === 'graph' && cyInstance) setTimeout(() => cyInstance.resize(), 30)
 }
 
@@ -364,8 +307,7 @@ function switchTab(name, el) {
 // ─── Утилиты ──────────────────────────────────
 
 function setProgress(pct) {
-  const bar  = document.getElementById('progress-bar')
-  const fill = document.getElementById('progress-fill')
+  const bar = document.getElementById('progress-bar'); const fill = document.getElementById('progress-fill')
   if (pct === 0) { bar.classList.remove('active'); fill.style.width = '0%' }
   else           { bar.classList.add('active');    fill.style.width = pct + '%' }
 }
@@ -373,8 +315,7 @@ function setProgress(pct) {
 let toastTimer = null
 function showToast(msg, type = '') {
   const toast = document.getElementById('toast')
-  toast.textContent = msg
-  toast.className   = `toast ${type} show`
+  toast.textContent = msg; toast.className = `toast ${type} show`
   clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => toast.classList.remove('show'), 3500)
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 4000)
 }
