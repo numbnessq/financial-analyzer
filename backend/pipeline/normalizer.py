@@ -1,4 +1,8 @@
 # backend/pipeline/normalizer.py
+"""
+Нормализация позиций.
+ВАЖНО: НЕ транслитерируем — оставляем русские названия.
+"""
 import re
 import unicodedata
 from typing import Any
@@ -6,13 +10,13 @@ from typing import Any
 
 UNIT_MAP = {
     "куб.м": "м3", "куб м": "м3", "кубометр": "м3", "m3": "м3",
-    "кв.м": "м2", "кв м": "м2", "квадратный метр": "м2",
+    "кв.м":  "м2", "кв м":  "м2", "квадратный метр": "м2",
     "килограмм": "кг", "кило": "кг", "kg": "кг",
-    "тонна": "т", "тн": "т",
+    "тонна": "т",  "тн": "т",
     "штука": "шт", "штук": "шт", "единица": "шт",
-    "литр": "л", "л.": "л",
-    "метр": "м", "м.": "м",
-    "час": "ч", "часов": "ч",
+    "литр":  "л",  "л.": "л",
+    "метр":  "м",  "м.": "м",
+    "час":   "ч",  "часов": "ч",
 }
 
 NOISE_WORDS = [
@@ -22,14 +26,6 @@ NOISE_WORDS = [
     "рядовой", "крупный", "мелкий", "средний",
     "гравийный", "гранитный", "известняковый",
 ]
-
-CYR_TO_LAT = {
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
-    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
-    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
-    "ы": "y", "э": "e", "ю": "yu", "я": "ya", "ь": "", "ъ": "",
-}
 
 JUNK_VALUES = {
     "не указан", "unknown", "неизвестно", "неизвестный контрагент",
@@ -42,9 +38,7 @@ def _coerce_float(value: Any) -> float:
         if value is None:
             return 0.0
         s = str(value).replace(" ", "").replace(",", ".").strip()
-        if not s:
-            return 0.0
-        return float(s)
+        return float(s) if s else 0.0
     except (TypeError, ValueError):
         return 0.0
 
@@ -53,12 +47,9 @@ def _clean_label(value: Any) -> str:
     if value is None:
         return ""
     s = str(value).strip()
-    if not s:
+    if not s or s.lower() in JUNK_VALUES:
         return ""
-    if s.lower() in JUNK_VALUES:
-        return ""
-    s = re.sub(r"\s+", " ", s)
-    return s
+    return re.sub(r"\s+", " ", s)
 
 
 def normalize_unit(unit: str) -> str:
@@ -68,85 +59,69 @@ def normalize_unit(unit: str) -> str:
     return UNIT_MAP.get(u, u)
 
 
-def transliterate_ru_to_lat(text: str) -> str:
-    if not text:
-        return ""
-    out = []
-    for ch in text:
-        out.append(CYR_TO_LAT.get(ch, ch))
-    return "".join(out)
-
-
-def normalize_text(text: Any) -> str:
+def canonicalize(name: Any) -> str:
     """
-    Унифицированная нормализация для matching:
-    - NFKC
-    - lower
-    - translit RU -> LAT
-    - удаление спецсимволов
-    - collapse whitespace
+    Канонизация названия для matcher.
+    Оставляет кириллицу — НЕ транслитерирует.
     """
-    if text is None:
+    if not name:
         return ""
 
-    s = unicodedata.normalize("NFKC", str(text))
-    s = s.strip().lower().replace("ё", "е")
-    s = transliterate_ru_to_lat(s)
+    s = unicodedata.normalize("NFKC", str(name)).strip().lower()
+    s = s.replace("ё", "е")
 
-    # удаляем спецсимволы, оставляем буквы/цифры/пробелы
-    s = re.sub(r"[^a-z0-9\s]+", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
+    # Убираем шумовые слова
+    for word in NOISE_WORDS:
+        s = re.sub(rf'\b{word}\b', '', s)
+
+    # Убираем диапазоны: 20-40, 5/10
+    s = re.sub(r'\b\d+\s*[-/×x]\s*\d+\b', ' ', s)
+
+    # Убираем дефис между буквой и цифрой: м-300 → м300
+    s = re.sub(r'([а-яёa-z])[-–](\d)', r'\1\2', s)
+
+    # Убираем пробел между буквой и цифрой: м 300 → м300
+    s = re.sub(r'([а-яёa-z])\s+(\d)', r'\1\2', s)
+
+    # Схлопываем пробелы
+    s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
-def canonicalize(name: Any) -> str:
-    """
-    Канонизация позиции для matcher.
-    Важно: vague-слова не удаляем, потому что они нужны scorer’у.
-    """
-    s = normalize_text(name)
-    if not s:
+# normalize_text нужен только scorer'у для VAGUE_KEYWORDS — оставляем кириллицу
+def normalize_text(text: Any) -> str:
+    if not text:
         return ""
-
-    # убираем дублирующиеся пробелы и простые размерности
-    s = re.sub(r"\b\d+\s*[-/×x]\s*\d+\b", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
+    s = unicodedata.normalize("NFKC", str(text)).strip().lower()
+    s = s.replace("ё", "е")
+    s = re.sub(r'\s+', ' ', s).strip()
     return s
 
 
 def normalize_item(item: dict, source: str = "") -> dict:
-    """
-    Приводит item к обязательной схеме:
-    {
-      name, price, quantity, department, contractor, source_file
-    }
-    """
     if not isinstance(item, dict):
         return {}
 
     raw_name = item.get("name") or item.get("item_name") or item.get("canonical_name") or ""
-    name = _clean_label(raw_name)
-    department = _clean_label(item.get("department", ""))
-    contractor = _clean_label(item.get("contractor", ""))
-    source_file = _clean_label(item.get("source_file", "")) or _clean_label(item.get("source", "")) or _clean_label(source)
+    name        = _clean_label(raw_name)
+    department  = _clean_label(item.get("department", ""))
+    contractor  = _clean_label(item.get("contractor", ""))
+    source_file = _clean_label(item.get("source_file") or item.get("source") or source)
 
     normalized = {
-        "name": name,
+        "name":           name,
         "canonical_name": canonicalize(name),
-        "price": _coerce_float(item.get("price", 0)),
-        "quantity": _coerce_float(item.get("quantity", 1) or 1),
-        "department": department,
-        "contractor": contractor,
-        "source_file": source_file,
-        "unit": normalize_unit(item.get("unit", "")),
+        "price":          _coerce_float(item.get("price", 0)),
+        "quantity":       _coerce_float(item.get("quantity", 1) or 1),
+        "department":     department,
+        "contractor":     contractor,
+        "source_file":    source_file,
+        "source":         source_file,
+        "unit":           normalize_unit(item.get("unit", "")),
     }
 
-    # совместимость со старым кодом
-    normalized["source"] = source_file
-
-    # сохраняем прочие поля, если они есть
     for key in ("date", "currency", "description", "vat", "code"):
-        if key in item and key not in normalized:
+        if key in item:
             normalized[key] = item[key]
 
     return normalized
@@ -155,7 +130,7 @@ def normalize_item(item: dict, source: str = "") -> dict:
 def normalize_items(items: list, source: str = "") -> list:
     result = []
     for item in items or []:
-        normalized = normalize_item(item, source=source)
-        if normalized.get("name"):
-            result.append(normalized)
+        n = normalize_item(item, source=source)
+        if n.get("name"):
+            result.append(n)
     return result

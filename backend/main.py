@@ -59,15 +59,7 @@ def upload_files(files: list[UploadFile] = File(...)):
             "items":         ai_items,
         })
 
-    documents = [{"filename": f["original_name"], "items": f["items"]} for f in saved_files]
-    matched   = match_across_documents(documents)
-    analysis  = analyze_all_groups(matched)
-
-    return {
-        "uploaded": len(saved_files),
-        "files":    saved_files,
-        "analysis": {"summary": analysis.get("summary", ""), "total_anomalies": analysis.get("total_anomalies", 0)},
-    }
+    return {"uploaded": len(saved_files), "files": saved_files}
 
 
 @app.post("/analyze")
@@ -78,31 +70,45 @@ def analyze(documents: list[dict]):
         raise HTTPException(400, "Список документов пуст")
 
     for doc in documents:
-        dept        = doc.get("department", "")
-        contractor  = doc.get("contractor", "")
-        source_file = doc.get("source_file") or doc.get("filename", "")
-        enriched    = []
+        dept        = (doc.get("department") or "").strip()
+        contractor  = (doc.get("contractor") or "").strip()
+        source_file = (doc.get("source_file") or doc.get("filename") or "").strip()
+
+        enriched = []
         for item in doc.get("items", []):
             it = dict(item)
-            if dept       and not it.get("department"):   it["department"]  = dept
-            if contractor and not it.get("contractor"):   it["contractor"]  = contractor
-            if source_file and not it.get("source_file"): it["source_file"] = source_file
+            # Используем имя файла как source_file
+            if source_file and not it.get("source_file"):
+                it["source_file"] = source_file
+            # department только если реально задан
+            if dept and not it.get("department"):
+                it["department"] = dept
+            if contractor and not it.get("contractor"):
+                it["contractor"] = contractor
             enriched.append(it)
+
         doc["items"] = normalize_items(enriched, source=source_file)
 
     matched  = match_across_documents(documents)
     analysis = analyze_all_groups(matched)
 
-    aggregated_results = analysis.get("results", [])
-    _stored_results    = aggregated_results
+    aggregated = analysis.get("results", [])
 
-    G          = build_graph_from_aggregated(aggregated_results)
+    # Убираем "Не определён" из departments в результатах
+    for r in aggregated:
+        r["departments"] = [d for d in r.get("departments", [])
+                           if d and d.strip() not in ("Не определён", "")]
+
+    _stored_results = aggregated
+
+    # Граф только из реальных отделов
+    G          = build_graph_from_aggregated(aggregated)
     graph_json = export_json(G)
     _stored_graph = graph_json
 
     return {
         "status":          "ok",
-        "items_analyzed":  len(aggregated_results),
+        "items_analyzed":  len(aggregated),
         "total_anomalies": analysis.get("total_anomalies", 0),
         "graph_nodes":     len(graph_json["nodes"]),
         "graph_edges":     len(graph_json["edges"]),

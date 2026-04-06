@@ -6,140 +6,289 @@
   <title>Анализатор документов</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
 
     :root {
-      --bg:      #0d0f14; --bg2: #13161e; --bg3: #1a1e2a;
-      --border:  #252a38; --accent: #4f8ef7; --accent2: #7c5af7;
-      --green:   #3dd68c; --orange: #f7a24f; --red: #f75a5a;
-      --purple:  #b45af7; --text: #e8eaf2; --muted: #6b7280;
-      --font:    'Inter', sans-serif; --mono: 'JetBrains Mono', monospace;
-      --radius:  6px;
+      --bg:      #0a0b0d;
+      --bg2:     #0f1117;
+      --bg3:     #161820;
+      --bg4:     #1c1f2a;
+      --border:  #1e2130;
+      --border2: #2a2e3e;
+      --accent:  #3b7de8;
+      --text:    #c8cdd8;
+      --text2:   #8b90a0;
+      --green:   #2ea84a;
+      --orange:  #d4882a;
+      --red:     #cc3333;
+      --purple:  #7c3aed;
+      --mono:    'JetBrains Mono', monospace;
+      --r:       4px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: var(--font); height: 100vh; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; }
 
-    /* Header */
-    header { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; background: var(--bg2); -webkit-app-region: drag; }
-    header .logo { width: 26px; height: 26px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: var(--radius); flex-shrink: 0; }
-    header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.3px; }
-    header .status { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
-    header .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
 
+    /* ── Header ── */
+    header {
+      height: 38px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--bg2);
+      -webkit-app-region: drag;
+      flex-shrink: 0;
+    }
+    .logo {
+      width: 6px; height: 22px;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+    header h1 { font-size: 12px; font-weight: 600; letter-spacing: 0.5px; color: var(--text); }
+    .status { margin-left: auto; font-size: 10px; color: var(--text2); display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
+    .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+
+    /* ── Layout ── */
     .layout { display: flex; flex: 1; overflow: hidden; }
 
-    /* Sidebar */
-    .sidebar { width: 280px; border-right: 1px solid var(--border); background: var(--bg2); display: flex; flex-direction: column; padding: 16px; gap: 16px; overflow-y: auto; }
-    .section-label { font-size: 10px; font-weight: 600; letter-spacing: 1.2px; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 240px;
+      border-right: 1px solid var(--border);
+      background: var(--bg2);
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      gap: 12px;
+      overflow-y: auto;
+      flex-shrink: 0;
+    }
 
-    .drop-zone { border: 1px dashed var(--border); border-radius: var(--radius); padding: 20px 14px; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--bg3); }
-    .drop-zone:hover, .drop-zone.active { border-color: var(--accent); background: rgba(79,142,247,0.05); }
-    .drop-zone .icon { font-size: 24px; margin-bottom: 6px; }
-    .drop-zone p { font-size: 11px; color: var(--muted); line-height: 1.5; }
-    .drop-zone span { color: var(--accent); font-weight: 600; }
+    .label {
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      color: var(--text2);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .drop-zone {
+      border: 1px dashed var(--border2);
+      border-radius: var(--r);
+      padding: 16px 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      background: var(--bg3);
+    }
+    .drop-zone:hover, .drop-zone.active { border-color: var(--accent); }
+    .drop-zone .icon { font-size: 20px; margin-bottom: 5px; opacity: 0.6; }
+    .drop-zone p { font-size: 10px; color: var(--text2); line-height: 1.5; }
+    .drop-zone span { color: var(--accent); }
     #file-input { display: none; }
 
-    .file-list { display: flex; flex-direction: column; gap: 5px; }
-    .file-item { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; display: flex; align-items: center; gap: 8px; font-size: 11px; }
-    .file-icon { font-size: 14px; }
-    .file-name { flex: 1; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .file-remove { cursor: pointer; color: var(--muted); font-size: 12px; }
+    .file-list { display: flex; flex-direction: column; gap: 4px; }
+    .file-item {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 5px 8px;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 10px;
+    }
+    .file-icon { font-size: 12px; opacity: 0.7; }
+    .file-name { flex: 1; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .file-remove { cursor: pointer; color: var(--text2); font-size: 10px; }
     .file-remove:hover { color: var(--red); }
 
-    .btn { width: 100%; padding: 9px 14px; border: none; border-radius: var(--radius); font-family: var(--font); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
-    .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: white; }
-    .btn-primary:hover { opacity: 0.88; }
-    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-secondary { background: var(--bg3); color: var(--muted); border: 1px solid var(--border); }
-    .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+    .btn {
+      width: 100%; padding: 8px 12px;
+      border: 1px solid var(--border2);
+      border-radius: var(--r);
+      font-family: var(--mono);
+      font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+      letter-spacing: 0.3px;
+    }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover { background: #2d6dd4; border-color: #2d6dd4; }
+    .btn-primary:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-ghost { background: transparent; color: var(--text2); }
+    .btn-ghost:hover { border-color: var(--border2); color: var(--text); }
 
-    .progress-bar { height: 2px; background: var(--border); border-radius: 2px; overflow: hidden; display: none; }
+    .progress-bar { height: 1px; background: var(--border); border-radius: 1px; overflow: hidden; display: none; }
     .progress-bar.active { display: block; }
-    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.3s; width: 0%; }
+    .progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; width: 0%; }
 
-    /* Main */
+    /* ── Main ── */
     .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg2); padding: 0 16px; }
-    .tab { padding: 10px 16px; font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+    .tabs {
+      height: 36px;
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+      padding: 0 12px;
+      flex-shrink: 0;
+    }
+    .tab {
+      padding: 0 14px;
+      font-size: 11px; font-weight: 500;
+      color: var(--text2); cursor: pointer;
+      border-bottom: 1px solid transparent;
+      transition: all 0.15s;
+      display: flex; align-items: center;
+    }
     .tab:hover { color: var(--text); }
-    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
 
-    .tab-content { flex: 1; overflow: auto; padding: 16px; display: none; flex-direction: column; }
+    .tab-content { flex: 1; overflow: auto; padding: 12px; display: none; flex-direction: column; gap: 8px; }
     .tab-content.active { display: flex; }
+
+    /* Graph tab */
     #tab-graph { padding: 0 !important; position: relative; overflow: hidden; }
     #cy { width: 100%; height: 100%; background: var(--bg); display: none; }
 
-    /* Filters */
-    .filters { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-shrink: 0; }
-    .filters span { font-size: 11px; color: var(--muted); font-weight: 600; }
-    .filter-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg3); color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s; font-family: var(--mono); }
-    .filter-btn:hover { border-color: var(--accent); color: var(--text); }
-    .filter-btn.active { background: var(--accent); border-color: var(--accent); color: white; }
-    .filter-btn[data-risk="CRITICAL"].active { background: var(--purple); border-color: var(--purple); }
-    .filter-btn[data-risk="HIGH"].active     { background: var(--red);    border-color: var(--red); }
-    .filter-btn[data-risk="MEDIUM"].active   { background: var(--orange); border-color: var(--orange); }
-    .filter-btn[data-risk="LOW"].active      { background: var(--green);  border-color: var(--green); color: #000; }
+    /* ── Filters ── */
+    .filters { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .filters-label { font-size: 9px; font-weight: 600; letter-spacing: 1px; color: var(--text2); text-transform: uppercase; }
+    .filter-btn {
+      padding: 3px 8px;
+      border: 1px solid var(--border2);
+      border-radius: 3px;
+      background: transparent;
+      color: var(--text2);
+      font-family: var(--mono);
+      font-size: 10px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+      letter-spacing: 0.3px;
+    }
+    .filter-btn:hover { border-color: var(--text2); color: var(--text); }
+    .filter-btn.active[data-risk="ALL"]      { background: var(--accent);  border-color: var(--accent);  color: #fff; }
+    .filter-btn.active[data-risk="CRITICAL"] { background: var(--purple);  border-color: var(--purple);  color: #fff; }
+    .filter-btn.active[data-risk="HIGH"]     { background: var(--red);     border-color: var(--red);     color: #fff; }
+    .filter-btn.active[data-risk="MEDIUM"]   { background: var(--orange);  border-color: var(--orange);  color: #fff; }
+    .filter-btn.active[data-risk="LOW"]      { background: var(--green);   border-color: var(--green);   color: #fff; }
 
-    /* Table */
-    .table-wrap { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+    /* ── Table ── */
+    .table-wrap { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); }
     .results-table { width: 100%; border-collapse: collapse; }
 
-    .results-table thead { position: sticky; top: 0; background: var(--bg2); z-index: 2; }
-    .results-table th { padding: 8px 12px; font-size: 10px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--muted); text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
-
+    .results-table thead { position: sticky; top: 0; z-index: 2; }
+    .results-table th {
+      padding: 7px 10px;
+      font-size: 9px; font-weight: 600;
+      letter-spacing: 1px; text-transform: uppercase;
+      color: var(--text2);
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      text-align: left; white-space: nowrap;
+    }
     .th-sort { cursor: pointer; user-select: none; }
     .th-sort:hover { color: var(--text); }
     .th-sort.desc::after { content: ' ↓'; color: var(--accent); }
     .th-sort.asc::after  { content: ' ↑'; color: var(--accent); }
 
-    .results-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    .results-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
     .results-table tr:last-child td { border-bottom: none; }
-    .results-table tr:hover td { background: rgba(79,142,247,0.04); }
-    .row-critical td { background: rgba(180,90,247,0.05) !important; }
-    .row-critical:hover td { background: rgba(180,90,247,0.09) !important; }
+    .results-table tbody tr:hover td { background: var(--bg3); }
 
-    .item-name  { font-weight: 600; font-size: 12px; }
-    .item-depts { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
-    .td-score   { width: 130px; }
-    .td-level   { width: 90px; }
+    .row-critical td { border-left: 2px solid var(--purple); }
+    .row-high     td { border-left: 2px solid var(--red); }
 
-    .score-bar  { display: flex; align-items: center; gap: 8px; }
-    .score-track { flex: 1; min-width: 0; height: 5px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden; }
-    .score-fill { height: 100%; border-radius: 3px; }
-    .score-num  { font-family: var(--mono); font-size: 12px; font-weight: 600; width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .item-name  { font-size: 11px; font-weight: 600; color: var(--text); }
+    .item-depts { font-size: 10px; color: var(--text2); margin-top: 2px; }
 
-    .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; font-family: var(--mono); letter-spacing: 0.5px; }
-    .badge-LOW      { background: rgba(61,214,140,0.15); color: var(--green); }
-    .badge-MEDIUM   { background: rgba(247,162,79,0.15); color: var(--orange); }
-    .badge-HIGH     { background: rgba(247,90,90,0.15);  color: var(--red); }
-    .badge-CRITICAL { background: rgba(180,90,247,0.15); color: var(--purple); }
+    .score-bar  { display: flex; align-items: center; gap: 8px; width: 110px; }
+    .score-track { flex: 1; min-width: 0; height: 3px; background: var(--border2); border-radius: 2px; overflow: hidden; }
+    .score-fill { height: 100%; border-radius: 2px; }
+    .score-num  { font-size: 11px; font-weight: 600; width: 24px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
-    .explanation { font-size: 11px; color: var(--muted); line-height: 1.5; }
+    .badge {
+      display: inline-block; padding: 2px 6px;
+      border-radius: 3px; font-size: 9px; font-weight: 700;
+      letter-spacing: 0.8px; font-family: var(--mono);
+    }
+    .badge-LOW      { color: var(--green);  background: rgba(46,168,74,0.1);  border: 1px solid rgba(46,168,74,0.3); }
+    .badge-MEDIUM   { color: var(--orange); background: rgba(212,136,42,0.1); border: 1px solid rgba(212,136,42,0.3); }
+    .badge-HIGH     { color: var(--red);    background: rgba(204,51,51,0.1);  border: 1px solid rgba(204,51,51,0.3); }
+    .badge-CRITICAL { color: #a78bfa;       background: rgba(124,58,237,0.1); border: 1px solid rgba(124,58,237,0.3); }
 
-    /* Empty state */
-    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; color: var(--muted); }
-    .empty-state .big-icon { font-size: 40px; opacity: 0.35; }
-    .empty-state p { font-size: 12px; }
+    .explanation { font-size: 10px; color: var(--text2); line-height: 1.5; max-width: 380px; }
 
-    /* Graph */
-    .graph-legend { position: absolute; top: 14px; right: 14px; background: rgba(19,22,30,0.92); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; font-size: 11px; display: none; flex-direction: column; gap: 6px; z-index: 10; }
-    .legend-title { font-size: 9px; font-weight: 700; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 2px; }
-    .legend-item { display: flex; align-items: center; gap: 7px; }
-    .legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    /* Empty */
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; color: var(--text2); }
+    .empty-state .icon { font-size: 32px; opacity: 0.25; }
+    .empty-state p { font-size: 11px; }
 
-    .graph-controls { position: absolute; bottom: 14px; right: 14px; display: none; gap: 6px; z-index: 10; }
-    .graph-btn { background: rgba(19,22,30,0.92); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius); padding: 6px 11px; font-size: 12px; cursor: pointer; }
-    .graph-btn:hover { border-color: var(--accent); color: var(--accent); }
+    /* Graph overlay */
+    .graph-legend {
+      position: absolute; top: 12px; right: 12px;
+      background: rgba(10,11,13,0.9);
+      border: 1px solid var(--border2);
+      border-radius: var(--r);
+      padding: 10px 12px; font-size: 10px;
+      display: none; flex-direction: column; gap: 5px; z-index: 10;
+    }
+    .legend-title { font-size: 9px; font-weight: 600; color: var(--text2); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 2px; }
+    .legend-item { display: flex; align-items: center; gap: 7px; color: var(--text2); }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
-    .cy-tooltip { position: absolute; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 11px; font-size: 11px; pointer-events: none; display: none; z-index: 20; max-width: 240px; line-height: 1.5; }
+    .graph-controls { position: absolute; bottom: 12px; right: 12px; display: none; gap: 4px; z-index: 10; }
+    .graph-btn {
+      background: rgba(10,11,13,0.9); border: 1px solid var(--border2);
+      color: var(--text2); border-radius: var(--r);
+      padding: 5px 10px; font-size: 11px; cursor: pointer;
+      font-family: var(--mono);
+    }
+    .graph-btn:hover { border-color: var(--accent); color: var(--text); }
 
-    .json-output { flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; font-family: var(--mono); font-size: 11px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; overflow: auto; color: #a8b4c8; }
+    .cy-tooltip {
+      position: absolute; background: var(--bg2);
+      border: 1px solid var(--border2);
+      border-radius: var(--r); padding: 6px 10px;
+      font-size: 10px; pointer-events: none;
+      display: none; z-index: 20; max-width: 220px; line-height: 1.5;
+      font-family: var(--mono);
+    }
 
-    .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 16px; font-size: 12px; display: flex; align-items: center; gap: 8px; transform: translateY(60px); opacity: 0; transition: all 0.25s; z-index: 100; max-width: 360px; }
-    .toast.show { transform: translateY(0); opacity: 1; }
+    /* Raw JSON */
+    .json-output {
+      flex: 1; background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--r); padding: 12px;
+      font-size: 10px; line-height: 1.7;
+      white-space: pre-wrap; word-break: break-all;
+      overflow: auto; color: var(--text2);
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 16px; right: 16px;
+      background: var(--bg2); border: 1px solid var(--border2);
+      border-radius: var(--r); padding: 8px 14px; font-size: 11px;
+      display: flex; align-items: center; gap: 8px;
+      transform: translateY(50px); opacity: 0;
+      transition: all 0.2s; z-index: 100; max-width: 340px;
+    }
+    .toast.show    { transform: translateY(0); opacity: 1; }
     .toast.error   { border-color: var(--red); }
     .toast.success { border-color: var(--green); }
   </style>
@@ -148,7 +297,7 @@
 
 <header>
   <div class="logo"></div>
-  <h1>Анализатор документов</h1>
+  <h1>АНАЛИЗАТОР ДОКУМЕНТОВ</h1>
   <div class="status">
     <div class="dot"></div>
     <span>localhost:8000</span>
@@ -158,16 +307,16 @@
 <div class="layout">
   <aside class="sidebar">
     <div>
-      <div class="section-label">Документы</div>
+      <div class="label">Документы</div>
       <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
         <div class="icon">📂</div>
-        <p><span>Выбери файлы</span> или перетащи<br>PDF · DOCX · XLSX</p>
+        <p><span>Выбери файлы</span><br>PDF · DOCX · XLSX</p>
       </div>
       <input type="file" id="file-input" multiple accept=".pdf,.docx,.xlsx"/>
     </div>
 
     <div id="file-list-section" style="display:none">
-      <div class="section-label">Загружено <span id="file-count">0</span> файлов</div>
+      <div class="label">Загружено: <span id="file-count">0</span></div>
       <div class="file-list" id="file-list"></div>
     </div>
 
@@ -175,43 +324,39 @@
       <div class="progress-fill" id="progress-fill"></div>
     </div>
 
-    <button class="btn btn-primary" id="btn-analyze" disabled onclick="runAnalyze()">⚡ Запустить анализ</button>
-    <button class="btn btn-secondary" onclick="clearAll()">Очистить</button>
+    <button class="btn btn-primary" id="btn-analyze" disabled onclick="runAnalyze()">▶ ЗАПУСТИТЬ АНАЛИЗ</button>
+    <button class="btn btn-ghost" onclick="clearAll()">ОЧИСТИТЬ</button>
   </aside>
 
   <main class="main">
     <div class="tabs">
-      <div class="tab active" onclick="switchTab('results', this)">Результаты</div>
-      <div class="tab" onclick="switchTab('graph', this)">Граф</div>
-      <div class="tab" onclick="switchTab('raw', this)">Raw JSON</div>
+      <div class="tab active" onclick="switchTab('results', this)">РЕЗУЛЬТАТЫ</div>
+      <div class="tab" onclick="switchTab('graph', this)">ГРАФ</div>
+      <div class="tab" onclick="switchTab('raw', this)">RAW JSON</div>
     </div>
 
     <!-- Результаты -->
     <div class="tab-content active" id="tab-results">
       <div class="empty-state" id="empty-results" style="flex:1">
-        <div class="big-icon">🔍</div><p>Загрузи файлы и запусти анализ</p>
+        <div class="icon">▣</div><p>Загрузи файлы и запусти анализ</p>
       </div>
-
-      <div id="results-content" style="display:none; flex-direction:column; flex:1; overflow:hidden">
-        <!-- Фильтры -->
+      <div id="results-content" style="display:none; flex-direction:column; flex:1; overflow:hidden; gap:8px">
         <div class="filters">
-          <span>ФИЛЬТР:</span>
-          <button class="filter-btn active" data-risk="ALL"      onclick="setFilter('ALL')">Все</button>
+          <span class="filters-label">ФИЛЬТР</span>
+          <button class="filter-btn active" data-risk="ALL"      onclick="setFilter('ALL')">ВСЕ</button>
           <button class="filter-btn"        data-risk="CRITICAL" onclick="setFilter('CRITICAL')">CRITICAL</button>
           <button class="filter-btn"        data-risk="HIGH"     onclick="setFilter('HIGH')">HIGH</button>
           <button class="filter-btn"        data-risk="MEDIUM"   onclick="setFilter('MEDIUM')">MEDIUM</button>
           <button class="filter-btn"        data-risk="LOW"      onclick="setFilter('LOW')">LOW</button>
         </div>
-
-        <!-- Таблица -->
         <div class="table-wrap">
           <table class="results-table" id="results-table">
             <thead>
               <tr>
-                <th class="th-sort" data-col="name" onclick="sortBy('name')">Позиция</th>
-                <th class="th-sort td-score desc" data-col="score" onclick="sortBy('score')">Скор</th>
-                <th class="th-sort td-level" data-col="risk_level" onclick="sortBy('risk_level')">Риск</th>
-                <th>Объяснение</th>
+                <th class="th-sort desc" data-col="score" onclick="sortBy('score')">СКОР</th>
+                <th class="th-sort" data-col="name"  onclick="sortBy('name')">ПОЗИЦИЯ</th>
+                <th class="th-sort" data-col="risk_level" onclick="sortBy('risk_level')">РИСК</th>
+                <th>ОБЪЯСНЕНИЕ</th>
               </tr>
             </thead>
             <tbody id="results-body"></tbody>
@@ -223,22 +368,22 @@
     <!-- Граф -->
     <div class="tab-content" id="tab-graph">
       <div class="empty-state" id="empty-graph" style="flex:1">
-        <div class="big-icon">🕸️</div><p>Граф появится после анализа</p>
+        <div class="icon">◈</div><p>Граф появится после анализа</p>
       </div>
       <div id="cy"></div>
       <div class="graph-legend" id="graph-legend">
         <div class="legend-title">Легенда</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#2196f3"></div>Подразделение</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#009688"></div>Контрагент</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#3dd68c"></div>LOW</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#f7a24f"></div>MEDIUM</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#f75a5a"></div>HIGH</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#9c27b0"></div>CRITICAL</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#3b7de8"></div>Подразделение</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#1a7a5e"></div>Контрагент</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#2ea84a"></div>LOW</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#d4882a"></div>MEDIUM</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#cc3333"></div>HIGH</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div>CRITICAL</div>
       </div>
       <div class="graph-controls" id="graph-controls">
-        <button class="graph-btn" onclick="fitGraph()">⊡ Всё</button>
-        <button class="graph-btn" onclick="zoomGraph(1.2)">＋</button>
-        <button class="graph-btn" onclick="zoomGraph(0.8)">－</button>
+        <button class="graph-btn" onclick="fitGraph()">FIT</button>
+        <button class="graph-btn" onclick="zoomGraph(1.2)">+</button>
+        <button class="graph-btn" onclick="zoomGraph(0.8)">−</button>
       </div>
       <div class="cy-tooltip" id="cy-tooltip"></div>
     </div>
@@ -246,7 +391,7 @@
     <!-- Raw JSON -->
     <div class="tab-content" id="tab-raw">
       <div class="empty-state" id="empty-raw" style="flex:1">
-        <div class="big-icon">{ }</div><p>Raw JSON появится после анализа</p>
+        <div class="icon">{ }</div><p>Raw JSON появится после анализа</p>
       </div>
       <div class="json-output" id="raw-output" style="display:none"></div>
     </div>
@@ -255,14 +400,5 @@
 
 <div class="toast" id="toast"></div>
 <script src="renderer.js"></script>
-<script>
-  // Показываем results-content когда данные есть
-  const _orig = window.renderResults
-  window.renderResults = function() {
-    _orig()
-    document.getElementById('empty-results').style.display  = 'none'
-    document.getElementById('results-content').style.display = 'flex'
-  }
-</script>
 </body>
 </html>
