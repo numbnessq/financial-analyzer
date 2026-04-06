@@ -3,6 +3,8 @@
 import json
 import logging
 import requests
+import re
+from datetime import datetime
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -15,10 +17,10 @@ MODEL_NAME = "mistral"
 # Максимальное количество попыток при ошибке
 MAX_RETRIES = 3
 
-# Промпт — инструкция для модели
-PROMPT_TEMPLATE = """Ты — система извлечения структурированных данных.
+# Улучшенный промпт с контрагентами и датами
+PROMPT_TEMPLATE = """Ты — система извлечения структурированных данных из документов закупок.
 
-Задача: извлечь из текста ТОЛЬКО товары, материалы, услуги или работы с ценой.
+Задача: извлечь из текста товары, материалы, услуги, работы, контрагентов и даты.
 
 Верни ТОЛЬКО JSON. Без комментариев. Без объяснений. Без markdown.
 
@@ -28,18 +30,22 @@ PROMPT_TEMPLATE = """Ты — система извлечения структу
     "name": "название позиции",
     "quantity": 1,
     "unit": "шт",
-    "price": 0
+    "price": 0,
+    "contractor": "поставщик или исполнитель",
+    "date": "дата в формате YYYY-MM-DD"
   }}
 ]
 
 Правила:
 - Если данных нет — верни пустой список []
-- НЕ извлекай: имена людей, подписи, реквизиты банков, ИНН, БИК, счета, даты, статусы
-- НЕ извлекай: названия банков, организаций, должности, адреса
-- ТОЛЬКО товары и услуги с реальной ценой
+- Извлекай: товары, услуги, работы с ценами
+- Извлекай: контрагенты (поставщики, подрядчики, исполнители)
+- Извлекай: даты выполнения, поставки, оказания услуг
 - quantity → число
 - unit → коротко ("шт", "кг", "м2", "л")
 - price → число (если есть)
+- contractor → полное или краткое название организации
+- date → в формате YYYY-MM-DD (если можно определить)
 - name → очищенное название без мусора
 
 Текст:
@@ -77,6 +83,33 @@ def safe_parse_json(response: str) -> list | None:
         pass
 
     return None
+
+
+def extract_dates_from_text(text: str) -> list[str]:
+    """Извлекает даты из текста простым regex'ом"""
+    # Ищем даты в форматах: DD.MM.YYYY, DD/MM/YYYY, YYYY-MM-DD
+    patterns = [
+        r'\b(\d{1,2}[./\-]\d{1,2}[./\-]\d{4})\b',  # DD.MM.YYYY или DD/MM/YYYY
+        r'\b(\d{4}[./\-]\d{1,2}[./\-]\d{1,2})\b',  # YYYY-MM-DD
+    ]
+
+    dates = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        for match in matches:
+            try:
+                # Пробуем распарсить дату
+                if '.' in match:
+                    dt = datetime.strptime(match, '%d.%m.%Y')
+                elif '/' in match:
+                    dt = datetime.strptime(match, '%d/%m/%Y')
+                else:
+                    dt = datetime.strptime(match, '%Y-%m-%d')
+                dates.append(dt.strftime('%Y-%m-%d'))
+            except:
+                continue
+
+    return list(set(dates))  # Уникальные даты
 
 
 def call_ollama(prompt: str) -> str | None:
@@ -149,16 +182,25 @@ def extract_items(text: str) -> list:
             logger.warning(f"Попытка {attempt} — ответ не является списком.")
             continue
 
-        # Фильтруем мусорные позиции
-        items = [
-            item for item in items
-            if isinstance(item, dict)
-                and len(str(item.get("name", "")).strip()) >= 3
-                and item.get("price", 0) > 0  # только позиции с ценой
-        ]
+        # Фильтруем мусорные позиции и добавляем даты
+        filtered_items = []
+        for item in items:
+            if isinstance(item, dict):
+                name = str(item.get("name", "")).strip()
+                price = float(item.get("price", 0) or 0)
 
-        logger.info(f"Успешно извлечено {len(items)} позиций.")
-        return items
+                # Если есть имя и цена, или есть контрагент/дата - сохраняем
+                if (len(name) >= 3 and price > 0) or item.get("contractor") or item.get("date"):
+                    # Добавляем даты из текста если их нет
+                    if not item.get("date"):
+                        dates = extract_dates_from_text(text)
+                        if dates:
+                            item["date"] = dates[0]  # Берем первую найденную дату
+
+                    filtered_items.append(item)
+
+        logger.info(f"Успешно извлечено {len(filtered_items)} позиций.")
+        return filtered_items
 
     logger.error("Все попытки исчерпаны. Возвращаем пустой список.")
     return []

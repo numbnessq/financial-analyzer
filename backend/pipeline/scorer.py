@@ -1,37 +1,42 @@
 # backend/pipeline/scorer.py
 """
-Вероятностная модель риска.
+Вероятностная модель риска с учетом графа и исторических данных.
 
 risk = 1 - Π(1 - p_i)  где p_i — вероятность каждого фактора.
-
-Объяснения — только факты из данных, никаких шаблонных фраз.
 """
 
 import statistics
-from typing import Any
-from backend.pipeline.normalizer import normalize_text
+from typing import Any, Dict, List
+from datetime import datetime, timedelta  # Добавлено
+from collections import defaultdict
 
 
 # ─── Вероятности факторов ──────────────────────────────────────────
 FACTOR_PROBS = {
-    "duplicate_3_plus": 0.65,   # 3+ отдела — высокий риск
-    "duplicate_2":      0.35,   # 2 отдела — средний риск
-    "vague_item":       0.70,   # размытая формулировка
-    "price_deviation_50": 0.60, # цена > 50% от среднего
-    "price_deviation_20": 0.40, # цена > 20% от среднего
+    "duplicate_3_plus": 0.65,      # 3+ отделов — высокий риск
+    "duplicate_2": 0.35,           # 2 отдела — средний риск
+    "vague_item": 0.70,            # размытая формулировка
+    "price_deviation_50": 0.60,    # цена > 50% от среднего
+    "price_deviation_20": 0.40,    # цена > 20% от среднего
     "contractor_concentration": 0.50,  # один контрагент у многих
-    "split_suspected":  0.45,   # разбиение закупки
-    "single_occurrence": 0.10,  # мало данных
+    "split_suspected": 0.45,       # разбиение закупки
+    "single_occurrence": 0.10,     # мало данных
+    "contractor_blacklist": 0.80,  # подозрительный контрагент
+    "temporal_clustering": 0.35,   # частые закупки в короткий срок
+    "graph_central": 0.30,         # высокая центральность в графе
 }
 
 # Ключевые слова для размытых позиций
 VAGUE_KEYWORDS = {
-    normalize_text(w) for w in [
-        "прочие", "дополнительные", "сопутствующие",
-        "услуги", "работы", "расходы", "затраты", "материалы",
-    ]
+    "прочие", "дополнительные", "сопутствующие",
+    "услуги", "работы", "расходы", "затраты", "материалы",
+    "прочее", "иные", "разные", "разное"
 }
 
+# Черный список контрагентов (в реальной системе из БД)
+CONTRACTOR_BLACKLIST = {
+    "ООО Рога и Копыта", "ИП Петров", "Неизвестный поставщик"
+}
 
 # ─── Утилиты ───────────────────────────────────────────────────────
 
@@ -58,9 +63,14 @@ def _get_source_file(item: dict) -> str:
     return str(item.get("source_file") or item.get("source") or "").strip()
 
 
-def _is_vague(item: dict) -> bool:
-    name = normalize_text(_get_name(item))
-    return any(kw in name for kw in VAGUE_KEYWORDS)
+def _get_date(item: dict) -> str:
+    return str(item.get("date") or "").strip()
+
+
+def _is_vague(name: str) -> bool:
+    """Проверяет размытость формулировки"""
+    name_lower = name.lower().strip()
+    return any(kw in name_lower for kw in VAGUE_KEYWORDS)
 
 
 def _group_prices(group: dict) -> list[float]:
@@ -107,14 +117,16 @@ def _unique_contractors(group: dict) -> list[str]:
     return result
 
 
-# ─── Флаги ─────────────────────────────────────────────────────────
+# ─── Расширенные факторы риска ─────────────────────────────────────
 
-def calculate_flags(item: dict, group: dict) -> list[str]:
+def calculate_flags(item: dict, group: dict, graph_context: Dict = None) -> list[str]:
     flags = []
     departments = _unique_departments(group)
+    contractors = _unique_contractors(group)
     n_depts = len(departments)
     n_items = len(group.get("items", []))
 
+    # Дублирование по отделам
     if n_depts >= 3:
         flags.append("duplicate_3_plus")
     elif n_depts == 2:
@@ -122,10 +134,12 @@ def calculate_flags(item: dict, group: dict) -> list[str]:
     elif n_items == 1:
         flags.append("single_occurrence")
 
-    if _is_vague(item):
+    # Размытые формулировки
+    if _is_vague(_get_name(item)):
         flags.append("vague_item")
 
-    price     = _to_float(item.get("price", 0))
+    # Отклонения цен
+    price = _to_float(item.get("price", 0))
     ref_price = _reference_price(item, group)
 
     if price > 0 and ref_price > 0:
@@ -135,7 +149,7 @@ def calculate_flags(item: dict, group: dict) -> list[str]:
         elif dev > 20:
             flags.append("price_deviation_20")
 
-    # Split: >3 записей одной позиции в одном источнике
+    # Дробление закупки
     source = _get_source_file(item)
     same_source = [
         i for i in group.get("items", [])
@@ -144,8 +158,41 @@ def calculate_flags(item: dict, group: dict) -> list[str]:
     if len(same_source) >= 3:
         flags.append("split_suspected")
 
-    return flags
+    # Концентрация по контрагенту
+    if len(contractors) == 1 and n_items > 1:
+        flags.append("contractor_concentration")
 
+    # Подозрительные контрагенты
+    contractor = _get_contractor(item)
+    if contractor in CONTRACTOR_BLACKLIST:
+        flags.append("contractor_blacklist")
+
+    # Временной кластеринг (если есть даты)
+    dates = [_get_date(i) for i in group.get("items", []) if _get_date(i)]
+    if len(dates) > 2:
+        # Проверяем, есть ли закупки в течение 3 дней
+        try:
+            date_objects = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
+            date_objects.sort()
+            time_diffs = [(date_objects[i + 1] - date_objects[i]).days
+                          for i in range(len(date_objects) - 1)]
+            if any(diff <= 3 for diff in time_diffs):
+                flags.append("temporal_clustering")
+        except:
+            pass  # Игнорируем ошибки парсинга дат
+
+    # Графовые метрики (если доступны)
+    item_name = item.get("name", "")
+    item_key = f"item:{item_name}" if item_name else ""
+
+    if graph_context and item_key in graph_context:
+        node_context = graph_context[item_key]
+        if isinstance(node_context, dict):
+            centrality = node_context.get("centrality", 0)
+            if centrality > 0.1:  # Высокая центральность
+                flags.append("graph_central")
+
+    return flags
 
 # ─── Вероятностная модель ──────────────────────────────────────────
 
@@ -175,11 +222,12 @@ def build_explanation(flags: list[str], item: dict, group: dict) -> str:
     Объяснение со ссылками на конкретные факты из данных.
     """
     parts = []
-    departments  = _unique_departments(group)
-    contractors  = _unique_contractors(group)
-    price        = _to_float(item.get("price", 0))
-    ref_price    = _reference_price(item, group)
-    n_items      = len(group.get("items", []))
+    departments = _unique_departments(group)
+    contractors = _unique_contractors(group)
+    price = _to_float(item.get("price", 0))
+    ref_price = _reference_price(item, group)
+    n_items = len(group.get("items", []))
+    dates = [_get_date(i) for i in group.get("items", []) if _get_date(i)]
 
     if "duplicate_3_plus" in flags:
         depts_str = ", ".join(departments[:5])
@@ -203,8 +251,17 @@ def build_explanation(flags: list[str], item: dict, group: dict) -> str:
     if "split_suspected" in flags:
         parts.append(f"Возможное дробление — {n_items} записей одной позиции в одном документе")
 
-    if contractors and len(contractors) == 1:
-        parts.append(f"Единственный поставщик: {contractors[0]}")
+    if "contractor_concentration" in flags and contractors:
+        parts.append(f"Единственный поставщик для всех закупок: {contractors[0]}")
+
+    if "contractor_blacklist" in flags:
+        parts.append(f"Подозрительный контрагент: {_get_contractor(item)}")
+
+    if "temporal_clustering" in flags and dates:
+        parts.append(f"Частые закупки в короткий срок ({len(dates)} дат)")
+
+    if "graph_central" in flags:
+        parts.append("Высокая центральность в сети закупок")
 
     if "single_occurrence" in flags:
         parts.append("Недостаточно данных для сравнения — позиция встречается один раз")
@@ -214,28 +271,29 @@ def build_explanation(flags: list[str], item: dict, group: dict) -> str:
 
 # ─── Основная функция ──────────────────────────────────────────────
 
-def score_item(item: dict, group: dict) -> dict:
-    flags       = calculate_flags(item, group)
-    score       = probabilistic_score(flags)
-    risk_level  = get_risk_level(score)
+def score_item(item: dict, group: dict, graph_context: Dict = None) -> dict:
+    flags = calculate_flags(item, group, graph_context)
+    score = probabilistic_score(flags)
+    risk_level = get_risk_level(score)
     explanation = build_explanation(flags, item, group)
-    ref_price   = _reference_price(item, group)
-    price       = _to_float(item.get("price", 0))
-    dev         = _deviation_pct(price, ref_price) if ref_price > 0 and price > 0 else 0.0
+    ref_price = _reference_price(item, group)
+    price = _to_float(item.get("price", 0))
+    dev = _deviation_pct(price, ref_price) if ref_price > 0 and price > 0 else 0.0
 
     return {
-        "name":            _get_name(item),
-        "item":            _get_name(item),
-        "department":      _get_department(item),
-        "contractor":      _get_contractor(item),
-        "source_file":     _get_source_file(item),
-        "price":           price,
+        "name": _get_name(item),
+        "item": _get_name(item),
+        "department": _get_department(item),
+        "contractor": _get_contractor(item),
+        "source_file": _get_source_file(item),
+        "date": _get_date(item),
+        "price": price,
         "reference_price": ref_price,
-        "deviation_pct":   dev,
-        "score":           score,
-        "risk_level":      risk_level,
-        "flags":           flags,
-        "explanation":     explanation,
-        "departments":     _unique_departments(group),
-        "contractors":     _unique_contractors(group),
+        "deviation_pct": dev,
+        "score": score,
+        "risk_level": risk_level,
+        "flags": flags,
+        "explanation": explanation,
+        "departments": _unique_departments(group),
+        "contractors": _unique_contractors(group),
     }

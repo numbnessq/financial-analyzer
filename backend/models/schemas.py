@@ -16,6 +16,8 @@ class Item(BaseModel):
     price: float = 0.0               # цена за единицу
     source: str = ""                 # из какого файла взята позиция
     department: str = "Не определён"
+    contractor: str = ""             # контрагент (новое поле!)
+    date: str = ""                   # дата закупки (новое поле!)
 
     @field_validator("name")
     @classmethod
@@ -38,6 +40,18 @@ class Item(BaseModel):
     def clean_unit(cls, v):
         """Очищаем единицу измерения от лишних пробелов"""
         return v.strip().lower()
+
+    @field_validator("contractor")
+    @classmethod
+    def clean_contractor(cls, v):
+        """Очищаем контрагента"""
+        return v.strip()
+
+    @field_validator("date")
+    @classmethod
+    def clean_date(cls, v):
+        """Очищаем дату"""
+        return v.strip()
 
 
 class DocumentResult(BaseModel):

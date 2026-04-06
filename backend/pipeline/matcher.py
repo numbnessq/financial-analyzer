@@ -1,5 +1,6 @@
 # backend/pipeline/matcher.py
 from rapidfuzz import fuzz, process
+from collections import defaultdict
 
 from backend.pipeline.normalizer import canonicalize, normalize_item
 
@@ -28,7 +29,8 @@ def find_best_match(name: str, candidates: list[str]) -> tuple[str, float] | Non
     return (best_match, score) if score >= SIMILARITY_THRESHOLD else None
 
 
-def _merge_item_context(item: dict, doc_department: str = "", doc_contractor: str = "", doc_source_file: str = "") -> dict:
+def _merge_item_context(item: dict, doc_department: str = "", doc_contractor: str = "",
+                        doc_source_file: str = "") -> dict:
     out = normalize_item(item, source=doc_source_file)
 
     if not out.get("department") and doc_department:
@@ -51,27 +53,31 @@ def _merge_item_context(item: dict, doc_department: str = "", doc_contractor: st
 
 def group_items(items: list[dict]) -> list[dict]:
     """
-    Группирует по canonical_name.
-    Важно: items внутри группы сохраняются полностью, без потери department.
+    Группирует по canonical_name + contractor для более точного анализа.
     """
     if not items:
         return []
 
     groups = []
-    group_names: list[str] = []
+    group_keys: list[str] = []  # key = canonical_name|contractor
 
     for raw_item in items:
         item = _merge_item_context(raw_item)
 
         item_name = item.get("canonical_name") or canonicalize(item.get("name", ""))
-        if not item_name:
+        contractor = item.get("contractor", "")
+
+        # Создаем ключ группировки: имя + контрагент
+        group_key = f"{item_name}|{contractor}" if contractor else item_name
+        if not item_name and not contractor:
             continue
 
-        match = find_best_match(item_name, group_names)
+        # Ищем существующую группу
+        match = find_best_match(group_key, group_keys)
 
         if match:
-            matched_name, _ = match
-            idx = group_names.index(matched_name)
+            matched_key, _ = match
+            idx = group_keys.index(matched_key)
             group = groups[idx]
 
             group["items"].append(item)
@@ -89,27 +95,35 @@ def group_items(items: list[dict]) -> list[dict]:
             if dept and dept not in group["departments"]:
                 group["departments"].append(dept)
 
-            contractor = item.get("contractor", "")
-            if contractor and contractor not in group["contractors"]:
-                group["contractors"].append(contractor)
+            contractor_item = item.get("contractor", "")
+            if contractor_item and contractor_item not in group["contractors"]:
+                group["contractors"].append(contractor_item)
+
+            date = item.get("date", "")
+            if date and date not in group["dates"]:
+                group["dates"].append(date)
 
         else:
             price = float(item.get("price", 0) or 0)
             dept = item.get("department", "")
-            contractor = item.get("contractor", "")
+            contractor_item = item.get("contractor", "")
             source_file = item.get("source_file", "")
+            date = item.get("date", "")
 
             groups.append({
                 "canonical_name": item_name,
+                "contractor": contractor,
+                "group_key": group_key,
                 "total_quantity": float(item.get("quantity", 0) or 0),
                 "unit": item.get("unit", ""),
                 "sources": [source_file] if source_file else [],
                 "departments": [dept] if dept else [],
-                "contractors": [contractor] if contractor else [],
+                "contractors": [contractor_item] if contractor_item else [],
+                "dates": [date] if date else [],
                 "prices": [price] if price > 0 else [],
                 "items": [item],
             })
-            group_names.append(item_name)
+            group_keys.append(group_key)
 
     return groups
 
@@ -129,7 +143,7 @@ def match_across_documents(documents: list[dict]) -> list[dict]:
                 doc_contractor=contractor,
                 doc_source_file=source_file,
             )
-            if enriched.get("name"):
+            if enriched.get("name") or enriched.get("contractor") or enriched.get("date"):
                 all_items.append(enriched)
 
     return group_items(all_items)
