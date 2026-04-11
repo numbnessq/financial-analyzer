@@ -57,6 +57,7 @@ function clearAll() {
   selectedFiles = []; allResults = []
   renderFileList(); resetResults()
   document.getElementById('file-input').value = ''
+  document.getElementById('btn-report').disabled = true
   if (cyInstance) { cyInstance.destroy(); cyInstance = null }
 }
 
@@ -81,7 +82,7 @@ async function runAnalyze() {
 
     const documents = (uploadData.files || []).map(f => ({
       filename:    f.original_name || '',
-      department:  '',   // пустой — чтобы не создавать "Не определён"
+      department:  '',
       contractor:  '',
       source_file: f.original_name || '',
       items: f.items || []
@@ -106,6 +107,9 @@ async function runAnalyze() {
     renderGraph(graphData)
     renderRaw({ results: resultsData, graph: graphData })
 
+    // Разблокируем кнопку отчёта
+    document.getElementById('btn-report').disabled = false
+
     const anomalies = allResults.filter(r => r.score >= 20).length
     showToast(`✓ Готово — ${allResults.length} позиций, аномалий: ${anomalies}`, 'success')
 
@@ -115,6 +119,49 @@ async function runAnalyze() {
   } finally {
     btn.disabled = false; btn.textContent = '▶ ЗАПУСТИТЬ АНАЛИЗ'
     setTimeout(() => setProgress(0), 800)
+  }
+}
+
+
+// ─── Скачать отчёт ────────────────────────────
+
+async function downloadReport() {
+  const btn = document.getElementById('btn-report')
+  btn.disabled = true
+  btn.textContent = '... ФОРМИРУЕТСЯ'
+
+  try {
+    const res = await fetch(`${API}/report`)
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.detail || `Ошибка сервера: ${res.status}`)
+    }
+
+    // Получаем имя файла из заголовка или генерируем сами
+    const disposition = res.headers.get('Content-Disposition') || ''
+    const match = disposition.match(/filename="?([^"]+)"?/)
+    const filename = match ? match[1] : `report_${Date.now()}.docx`
+
+    // Скачиваем через blob
+    const blob = await res.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+
+    showToast(`✓ Отчёт сохранён: ${filename}`, 'success')
+
+  } catch (err) {
+    showToast(`✕ ${err.message}`, 'error')
+    console.error(err)
+  } finally {
+    btn.disabled = false
+    btn.textContent = '↓ СКАЧАТЬ ОТЧЁТ .DOCX'
   }
 }
 

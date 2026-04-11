@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from backend.pipeline.parser import parse_file
 from backend.pipeline.ai_extractor import extract_items
@@ -13,17 +14,19 @@ from backend.pipeline.source_mapper import attach_source
 from backend.pipeline.matcher import match_across_documents
 from backend.pipeline.analyzer import analyze_all_groups
 from backend.pipeline.graph_builder import build_graph_from_aggregated, export_json
+from backend.pipeline.report_generator import generate_report
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 MAX_FILES = 15
 
-app = FastAPI(title="Financial Document Analyzer", version="0.4.0")  # Обновили версию
+app = FastAPI(title="Financial Document Analyzer", version="0.5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _stored_results: list[dict] = []
 _stored_graph: dict = {}
-_stored_analysis: dict = {}  # Сохраняем полный анализ
+_stored_analysis: dict = {}
+_stored_filenames: list[str] = []   # имена загруженных файлов для отчёта
 
 
 @app.get("/ping")
@@ -33,12 +36,16 @@ def ping():
 
 @app.post("/upload")
 def upload_files(files: list[UploadFile] = File(...)):
+    global _stored_filenames
+
     if len(files) > MAX_FILES:
         raise HTTPException(400, f"Максимум {MAX_FILES} файлов.")
     if not files:
         raise HTTPException(400, "Файлы не переданы")
 
     saved_files = []
+    _stored_filenames = []
+
     for file in files:
         unique_name = f"{uuid.uuid4()}_{file.filename}"
         save_path = UPLOAD_DIR / unique_name
@@ -51,6 +58,8 @@ def upload_files(files: list[UploadFile] = File(...)):
             ai_items = extract_items(parsed["text"])
             ai_items = normalize_items(ai_items, source=file.filename)
             ai_items = attach_source(ai_items, unique_name)
+
+        _stored_filenames.append(file.filename)
 
         saved_files.append({
             "original_name": file.filename,
@@ -70,7 +79,6 @@ def analyze(documents: list[dict]):
     if not documents:
         raise HTTPException(400, "Список документов пуст")
 
-    # Обогащаем данными
     for doc in documents:
         dept = (doc.get("department") or "").strip()
         contractor = (doc.get("contractor") or "").strip()
@@ -80,10 +88,8 @@ def analyze(documents: list[dict]):
         enriched = []
         for item in doc.get("items", []):
             it = dict(item)
-            # Используем имя файла как source_file
             if source_file and not it.get("source_file"):
                 it["source_file"] = source_file
-            # department только если реально задан
             if dept and not it.get("department"):
                 it["department"] = dept
             if contractor and not it.get("contractor"):
@@ -97,19 +103,15 @@ def analyze(documents: list[dict]):
     matched = match_across_documents(documents)
     analysis = analyze_all_groups(matched)
 
-    # Сохраняем полный анализ
     _stored_analysis = analysis
-
     aggregated = analysis.get("results", [])
 
-    # Убираем "Не определён" из departments в результатах
     for r in aggregated:
         r["departments"] = [d for d in r.get("departments", [])
                             if d and d.strip() not in ("Не определён", "")]
 
     _stored_results = aggregated
 
-    # Граф только из реальных отделов
     G = build_graph_from_aggregated(aggregated)
     graph_json = export_json(G)
     _stored_graph = graph_json
@@ -142,7 +144,33 @@ def get_graph():
 
 @app.get("/analysis")
 def get_full_analysis():
-    """Получить полный анализ для отладки"""
     if not _stored_analysis:
         raise HTTPException(404, "Анализ не выполнен. Сначала запусти POST /analyze")
     return _stored_analysis
+
+
+@app.get("/report")
+def get_report():
+    """
+    Генерирует и возвращает DOCX-отчёт по последнему анализу.
+    Браузер предложит скачать файл.
+    """
+    if not _stored_results:
+        raise HTTPException(404, "Нет данных для отчёта. Сначала запусти POST /analyze")
+
+    try:
+        docx_bytes = generate_report(
+            results=_stored_results,
+            source_files=_stored_filenames or None,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка генерации отчёта: {e}")
+
+    from datetime import datetime
+    filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

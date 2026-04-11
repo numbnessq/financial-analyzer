@@ -129,6 +129,15 @@
     .btn-ghost { background: transparent; color: var(--text2); }
     .btn-ghost:hover { border-color: var(--border2); color: var(--text); }
 
+    /* Кнопка скачать отчёт */
+    .btn-report {
+      background: transparent;
+      border-color: var(--green);
+      color: var(--green);
+    }
+    .btn-report:hover { background: rgba(46,168,74,0.1); }
+    .btn-report:disabled { opacity: 0.25; cursor: not-allowed; }
+
     .progress-bar { height: 1px; background: var(--border); border-radius: 1px; overflow: hidden; display: none; }
     .progress-bar.active { display: block; }
     .progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; width: 0%; }
@@ -291,6 +300,13 @@
     .toast.show    { transform: translateY(0); opacity: 1; }
     .toast.error   { border-color: var(--red); }
     .toast.success { border-color: var(--green); }
+
+    /* Разделитель в сайдбаре */
+    .sidebar-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0;
+    }
   </style>
 </head>
 <body>
@@ -325,6 +341,11 @@
     </div>
 
     <button class="btn btn-primary" id="btn-analyze" disabled onclick="runAnalyze()">▶ ЗАПУСТИТЬ АНАЛИЗ</button>
+
+    <div class="sidebar-divider"></div>
+
+    <button class="btn btn-report" id="btn-report" disabled onclick="downloadReport()">↓ СКАЧАТЬ ОТЧЁТ .DOCX</button>
+
     <button class="btn btn-ghost" onclick="clearAll()">ОЧИСТИТЬ</button>
   </aside>
 
