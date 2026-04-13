@@ -1,6 +1,6 @@
 // frontend/renderer.js
 
-const API = 'http://localhost:8000'
+const API = 'http://127.0.0.1:8000'
 let selectedFiles = []
 let cyInstance    = null
 let allResults    = []
@@ -67,39 +67,86 @@ function clearAll() {
 async function runAnalyze() {
   if (!selectedFiles.length) return
   const btn = document.getElementById('btn-analyze')
-  btn.disabled = true; btn.textContent = '... АНАЛИЗ'
-  setProgress(10)
+  btn.disabled = true; btn.textContent = '... ЗАГРУЗКА'
+  setProgress(5)
 
   try {
+    // 1. Загружаем файлы — быстро, без AI
     const formData = new FormData()
     selectedFiles.forEach(f => formData.append('files', f))
-    setProgress(25)
 
     const uploadRes = await fetch(`${API}/upload`, { method: 'POST', body: formData })
     if (!uploadRes.ok) throw new Error(`Upload: ${uploadRes.status}`)
     const uploadData = await uploadRes.json()
-    setProgress(45)
+    setProgress(20)
 
+    // 2. Передаём raw_text чтобы backend мог запустить AI
     const documents = (uploadData.files || []).map(f => ({
       filename:    f.original_name || '',
       department:  '',
       contractor:  '',
       source_file: f.original_name || '',
-      items: f.items || []
+      raw_text:    f.raw_text || '',
+      items:       f.items || [],
     }))
 
+    // 3. Запускаем анализ — backend сразу возвращает job_id
+    btn.textContent = '... AI АНАЛИЗ'
     const analyzeRes = await fetch(`${API}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(documents)
     })
     if (!analyzeRes.ok) throw new Error(`Analyze: ${analyzeRes.status}`)
-    setProgress(70)
+    const { job_id } = await analyzeRes.json()
 
-    const [resultsRes, graphRes] = await Promise.all([fetch(`${API}/results`), fetch(`${API}/graph`)])
+    // 4. Опрашиваем статус задачи каждые 2 секунды
+    await pollJob(job_id, btn)
+
+  } catch (err) {
+    showToast(`✕ ${err.message}`, 'error')
+    console.error(err)
+    btn.disabled = false; btn.textContent = '▶ ЗАПУСТИТЬ АНАЛИЗ'
+    setProgress(0)
+  }
+}
+
+async function pollJob(job_id, btn) {
+  return new Promise((resolve, reject) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/job/${job_id}`)
+        if (!res.ok) { clearInterval(interval); reject(new Error('Ошибка статуса задачи')); return }
+        const job = await res.json()
+
+        setProgress(job.progress || 0)
+        if (btn) btn.textContent = `... ${job.message || 'ОБРАБОТКА'}`
+
+        if (job.status === 'done') {
+          clearInterval(interval)
+          await loadResults()
+          resolve()
+        } else if (job.status === 'error') {
+          clearInterval(interval)
+          reject(new Error(job.message || 'Ошибка анализа'))
+        }
+      } catch (err) {
+        clearInterval(interval)
+        reject(err)
+      }
+    }, 2000)
+  })
+}
+
+async function loadResults() {
+  const btn = document.getElementById('btn-analyze')
+  try {
+    const [resultsRes, graphRes] = await Promise.all([
+      fetch(`${API}/results`),
+      fetch(`${API}/graph`)
+    ])
     const resultsData = await resultsRes.json()
     const graphData   = await graphRes.json()
-    setProgress(100)
 
     allResults = resultsData.results || []
     showResultsContent()
@@ -107,15 +154,10 @@ async function runAnalyze() {
     renderGraph(graphData)
     renderRaw({ results: resultsData, graph: graphData })
 
-    // Разблокируем кнопку отчёта
     document.getElementById('btn-report').disabled = false
 
     const anomalies = allResults.filter(r => r.score >= 20).length
     showToast(`✓ Готово — ${allResults.length} позиций, аномалий: ${anomalies}`, 'success')
-
-  } catch (err) {
-    showToast(`✕ ${err.message}`, 'error')
-    console.error(err)
   } finally {
     btn.disabled = false; btn.textContent = '▶ ЗАПУСТИТЬ АНАЛИЗ'
     setTimeout(() => setProgress(0), 800)
@@ -132,18 +174,15 @@ async function downloadReport() {
 
   try {
     const res = await fetch(`${API}/report`)
-
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       throw new Error(err.detail || `Ошибка сервера: ${res.status}`)
     }
 
-    // Получаем имя файла из заголовка или генерируем сами
     const disposition = res.headers.get('Content-Disposition') || ''
     const match = disposition.match(/filename="?([^"]+)"?/)
     const filename = match ? match[1] : `report_${Date.now()}.docx`
 
-    // Скачиваем через blob
     const blob = await res.blob()
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
@@ -155,7 +194,6 @@ async function downloadReport() {
     URL.revokeObjectURL(url)
 
     showToast(`✓ Отчёт сохранён: ${filename}`, 'success')
-
   } catch (err) {
     showToast(`✕ ${err.message}`, 'error')
     console.error(err)

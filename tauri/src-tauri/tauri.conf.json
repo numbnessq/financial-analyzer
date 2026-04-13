@@ -1,9 +1,10 @@
 {
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "build": {
-    "beforeBuildCommand": "",
-    "beforeDevCommand": "",
-    "devPath": "../frontend",
-    "distDir": "../frontend"
+  "beforeBuildCommand": "",
+  "beforeDevCommand": "/Users/dmitrij/PyCharmMiscProject/project/venv/bin/python3 /Users/dmitrij/PyCharmMiscProject/project/scripts/start_backend.py",
+  "devPath": "http://127.0.0.1:3000",
+  "distDir": "../../frontend"
   },
   "package": {
     "productName": "Financial Analyzer",
@@ -12,7 +13,10 @@
   "tauri": {
     "allowlist": {
       "all": false,
-      "shell": { "all": false, "open": true }
+      "shell": {
+        "all": false,
+        "open": true
+      }
     },
     "bundle": {
       "active": true,
