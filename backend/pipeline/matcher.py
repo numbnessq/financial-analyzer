@@ -1,10 +1,22 @@
 # backend/pipeline/matcher.py
-from rapidfuzz import fuzz, process
-from collections import defaultdict
+"""
+Матчер позиций между документами.
+Использует unit_price / total_price — без устаревшего поля 'price'.
+"""
 
+from rapidfuzz import fuzz, process
 from backend.pipeline.normalizer import canonicalize, normalize_item
 
 SIMILARITY_THRESHOLD = 90
+
+
+# ─── Утилиты ──────────────────────────────────────────────────────
+
+def _to_float(x) -> float:
+    try:
+        return float(str(x).replace(",", ".").replace(" ", "") or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _similarity(a: str, b: str, **kwargs) -> int:
@@ -20,120 +32,108 @@ def _similarity(a: str, b: str, **kwargs) -> int:
 def find_best_match(name: str, candidates: list[str]) -> tuple[str, float] | None:
     if not candidates:
         return None
-
     result = process.extractOne(name, candidates, scorer=_similarity)
     if result is None:
         return None
-
     best_match, score, _ = result
     return (best_match, score) if score >= SIMILARITY_THRESHOLD else None
 
 
-def _merge_item_context(item: dict, doc_department: str = "", doc_contractor: str = "",
-                        doc_source_file: str = "") -> dict:
+# ─── Обогащение элемента ──────────────────────────────────────────
+
+def _merge_item_context(
+    item: dict,
+    doc_department: str = "",
+    doc_contractor: str = "",
+    doc_source_file: str = "",
+) -> dict:
     out = normalize_item(item, source=doc_source_file)
 
     if not out.get("department") and doc_department:
         out["department"] = doc_department
-
     if not out.get("contractor") and doc_contractor:
         out["contractor"] = doc_contractor
-
     if not out.get("source_file") and doc_source_file:
         out["source_file"] = doc_source_file
-
     if not out.get("source"):
         out["source"] = out.get("source_file", "")
-
     if not out.get("canonical_name"):
         out["canonical_name"] = canonicalize(out.get("name", ""))
 
     return out
 
 
+# ─── Группировка ──────────────────────────────────────────────────
+
 def group_items(items: list[dict]) -> list[dict]:
-    """
-    Группирует по canonical_name + contractor для более точного анализа.
-    """
     if not items:
         return []
 
-    groups = []
-    group_keys: list[str] = []  # key = canonical_name|contractor
+    groups: list[dict]  = []
+    group_keys: list[str] = []
 
     for raw_item in items:
         item = _merge_item_context(raw_item)
 
-        item_name = item.get("canonical_name") or canonicalize(item.get("name", ""))
+        item_name  = item.get("canonical_name") or canonicalize(item.get("name", ""))
         contractor = item.get("contractor", "")
+        group_key  = f"{item_name}|{contractor}" if contractor else item_name
 
-        # Создаем ключ группировки: имя + контрагент
-        group_key = f"{item_name}|{contractor}" if contractor else item_name
         if not item_name and not contractor:
             continue
 
-        # Ищем существующую группу
         match = find_best_match(group_key, group_keys)
 
         if match:
             matched_key, _ = match
-            idx = group_keys.index(matched_key)
+            idx   = group_keys.index(matched_key)
             group = groups[idx]
 
             group["items"].append(item)
-            group["total_quantity"] += float(item.get("quantity", 0) or 0)
+            group["total_quantity"] += _to_float(item.get("quantity", 0))
 
-            price = float(item.get("price", 0) or 0)
-            if price > 0:
-                group["prices"].append(price)
+            # unit_price — для price stats (совместимость со scorer.py)
+            up = _to_float(item.get("unit_price") or item.get("price") or 0)
+            if up > 0:
+                group["prices"].append(up)
 
-            source_file = item.get("source_file", "")
-            if source_file and source_file not in group["sources"]:
-                group["sources"].append(source_file)
-
-            dept = item.get("department", "")
-            if dept and dept not in group["departments"]:
-                group["departments"].append(dept)
-
-            contractor_item = item.get("contractor", "")
-            if contractor_item and contractor_item not in group["contractors"]:
-                group["contractors"].append(contractor_item)
-
-            date = item.get("date", "")
-            if date and date not in group["dates"]:
-                group["dates"].append(date)
-
+            for field, key in (
+                ("source_file", "sources"),
+                ("department",  "departments"),
+                ("contractor",  "contractors"),
+                ("date",        "dates"),
+            ):
+                val = item.get(field, "")
+                if val and val not in group[key]:
+                    group[key].append(val)
         else:
-            price = float(item.get("price", 0) or 0)
-            dept = item.get("department", "")
-            contractor_item = item.get("contractor", "")
-            source_file = item.get("source_file", "")
-            date = item.get("date", "")
-
+            up = _to_float(item.get("unit_price") or item.get("price") or 0)
             groups.append({
                 "canonical_name": item_name,
-                "contractor": contractor,
-                "group_key": group_key,
-                "total_quantity": float(item.get("quantity", 0) or 0),
-                "unit": item.get("unit", ""),
-                "sources": [source_file] if source_file else [],
-                "departments": [dept] if dept else [],
-                "contractors": [contractor_item] if contractor_item else [],
-                "dates": [date] if date else [],
-                "prices": [price] if price > 0 else [],
-                "items": [item],
+                "contractor":     contractor,
+                "group_key":      group_key,
+                "total_quantity": _to_float(item.get("quantity", 0)),
+                "unit":           item.get("unit", ""),
+                "sources":        [item.get("source_file", "")] if item.get("source_file") else [],
+                "departments":    [item.get("department", "")] if item.get("department") else [],
+                "contractors":    [item.get("contractor", "")] if item.get("contractor") else [],
+                "dates":          [item.get("date", "")]       if item.get("date") else [],
+                "prices":         [up] if up > 0 else [],
+                "items":          [item],
             })
             group_keys.append(group_key)
 
     return groups
 
 
+# ─── Публичный API ────────────────────────────────────────────────
+
 def match_across_documents(documents: list[dict]) -> list[dict]:
     all_items = []
 
     for doc in documents or []:
-        dept = doc.get("department", "")
-        contractor = doc.get("contractor", "")
+        dept        = doc.get("department", "")
+        contractor  = doc.get("contractor", "")
         source_file = doc.get("source_file", "") or doc.get("filename", "")
 
         for item in doc.get("items", []):

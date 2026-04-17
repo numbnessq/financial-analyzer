@@ -1,56 +1,52 @@
 # backend/pipeline/normalizer.py
 """
-Нормализация позиций.
-ВАЖНО: НЕ транслитерируем — оставляем русские названия.
+Нормализатор позиций.
+Единый формат полей: name, canonical_name, quantity, unit,
+unit_price, total_price, contractor, date, source_file.
+
+НЕТ поля 'price' — только unit_price и total_price.
 """
+
 import re
 import unicodedata
 from typing import Any
 from datetime import datetime
 
-
 UNIT_MAP = {
-    "куб.м": "м3", "куб м": "м3", "кубометр": "м3", "m3": "м3",
-    "кв.м":  "м2", "кв м":  "м2", "квадратный метр": "м2",
-    "килограмм": "кг", "кило": "кг", "kg": "кг",
-    "тонна": "т",  "тн": "т",
-    "штука": "шт", "штук": "шт", "единица": "шт",
-    "литр":  "л",  "л.": "л",
-    "метр":  "м",  "м.": "м",
-    "час":   "ч",  "часов": "ч",
+    "куб.м": "м3", "куб м": "м3", "кубометр": "м3", "m3": "м3", "куб": "м3",
+    "кв.м":  "м2", "кв м":  "м2", "кв.метр": "м2",
+    "килограмм": "кг", "kg": "кг",
+    "тонна": "т", "тонн": "т",
+    "штука": "шт", "штук": "шт", "шт.": "шт",
+    "литр":  "л",
+    "метр":  "м",
+    "час":   "ч",
+    "пог.м": "пм", "погонный метр": "пм",
+    "компл": "компл.", "комплект": "компл.",
 }
 
-NOISE_WORDS = [
-    "марки", "марка", "класса", "класс", "типа", "тип",
-    "сорта", "сорт", "строительный", "строительная", "строительного",
-    "фракции", "фракция", "размером", "размер",
-    "рядовой", "крупный", "мелкий", "средний",
-    "гравийный", "гранитный", "известняковый",
-]
-
-JUNK_VALUES = {
-    "не указан", "unknown", "неизвестно", "неизвестный контрагент",
-    "неизвестный отдел", "-", "—", "none", "null", ""
-}
+JUNK_VALUES = {"", "-", "—", "none", "null", "unknown", "н/д", "нет"}
 
 
-def _coerce_float(value: Any) -> float:
+# ─── Утилиты ──────────────────────────────────────────────────────
+
+def _to_float(x: Any) -> float | None:
+    if x is None:
+        return None
+    s = str(x).strip().replace(" ", "").replace("\xa0", "").replace(",", ".")
+    s = re.sub(r"[^\d.\-]", "", s)
     try:
-        if value is None:
-            return 0.0
-        s = str(value).replace(" ", "").replace(",", ".").strip()
-        return float(s) if s else 0.0
-    except (TypeError, ValueError):
-        return 0.0
+        v = float(s)
+        return v if v >= 0 else None
+    except ValueError:
+        return None
 
 
-def _clean_label(value: Any) -> str:
-    if value is None:
+def _clean(x: Any) -> str:
+    if not x:
         return ""
-    s = str(value).strip()
-    if not s or s.lower() in JUNK_VALUES:
-        return ""
-    return re.sub(r"\s+", " ", s)
+    s = str(x).strip()
+    return "" if s.lower() in JUNK_VALUES else re.sub(r"\s+", " ", s)
 
 
 def normalize_unit(unit: str) -> str:
@@ -61,116 +57,87 @@ def normalize_unit(unit: str) -> str:
 
 
 def normalize_date(date_str: Any) -> str:
-    """Нормализует дату в формат YYYY-MM-DD"""
     if not date_str:
         return ""
-
-    try:
-        # Пробуем различные форматы
-        date_str = str(date_str).strip()
-        if not date_str:
-            return ""
-
-        # YYYY-MM-DD (уже нормализована)
-        if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
-            return date_str
-
-        # DD.MM.YYYY
-        if re.match(r'^\d{1,2}\.\d{1,2}\.\d{4}$', date_str):
-            dt = datetime.strptime(date_str, '%d.%m.%Y')
-            return dt.strftime('%Y-%m-%d')
-
-        # DD/MM/YYYY
-        if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
-            dt = datetime.strptime(date_str, '%d/%m/%Y')
-            return dt.strftime('%Y-%m-%d')
-
-        # YYYY/MM/DD
-        if re.match(r'^\d{4}/\d{1,2}/\d{1,2}$', date_str):
-            dt = datetime.strptime(date_str, '%Y/%m/%d')
-            return dt.strftime('%Y-%m-%d')
-
-    except:
-        pass
-
-    return str(date_str).strip()
+    s = str(date_str).strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return ""
 
 
-def canonicalize(name: Any) -> str:
-    """
-    Канонизация названия для matcher.
-    Оставляет кириллицу — НЕ транслитерирует.
-    """
+def canonicalize(name: str) -> str:
     if not name:
         return ""
-
-    s = unicodedata.normalize("NFKC", str(name)).strip().lower()
+    s = unicodedata.normalize("NFKC", name).lower()
     s = s.replace("ё", "е")
-
-    # Убираем шумовые слова
-    for word in NOISE_WORDS:
-        s = re.sub(rf'\b{word}\b', '', s)
-
-    # Убираем диапазоны: 20-40, 5/10
-    s = re.sub(r'\b\d+\s*[-/×x]\s*\d+\b', ' ', s)
-
-    # Убираем дефис между буквой и цифрой: м-300 → м300
-    s = re.sub(r'([а-яёa-z])[-–](\d)', r'\1\2', s)
-
-    # Убираем пробел между буквой и цифрой: м 300 → м300
-    s = re.sub(r'([а-яёa-z])\s+(\d)', r'\1\2', s)
-
-    # Схлопываем пробелы
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s
+    s = re.sub(r'\d+([.,]\d+)?\s*(м2|м3|шт|кг|л|м)\b', '', s)
+    s = re.sub(r'[^a-zа-я0-9 ]', ' ', s)
+    return re.sub(r'\s+', ' ', s).strip()
 
 
-# normalize_text нужен только scorer'у для VAGUE_KEYWORDS — оставляем кириллицу
-def normalize_text(text: Any) -> str:
-    if not text:
-        return ""
-    s = unicodedata.normalize("NFKC", str(text)).strip().lower()
-    s = s.replace("ё", "е")
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s
-
+# ─── Ядро нормализации ────────────────────────────────────────────
 
 def normalize_item(item: dict, source: str = "") -> dict:
-    if not isinstance(item, dict):
-        return {}
+    name       = _clean(item.get("name") or item.get("item_name"))
+    quantity   = _to_float(item.get("quantity"))
+    unit       = normalize_unit(item.get("unit", ""))
+    contractor = _clean(item.get("contractor"))
+    date       = normalize_date(item.get("date"))
+    source_f   = item.get("source_file") or source
 
-    raw_name = item.get("name") or item.get("item_name") or item.get("canonical_name") or ""
-    name = _clean_label(raw_name)
-    department = _clean_label(item.get("department", ""))
-    contractor = _clean_label(item.get("contractor", ""))
-    source_file = _clean_label(item.get("source_file") or item.get("source") or source)
-    date = normalize_date(item.get("date", ""))
+    # ── Цена: строгое разделение unit_price и total_price ─────────
+    unit_price  = _to_float(item.get("unit_price"))
+    total_price = _to_float(item.get("total_price"))
 
-    normalized = {
-        "name": name,
+    # Поле "price" из AI — определяем его смысл по quantity
+    legacy_price = _to_float(item.get("price"))
+    if legacy_price is not None and unit_price is None and total_price is None:
+        if quantity and quantity > 0:
+            # Проверяем: это unit_price или total_price?
+            # Если значение << ожидаемой итоговой суммы — это unit_price
+            # Используем простую эвристику: если есть поле "amount"/"sum"/"total"
+            alt_total = _to_float(item.get("amount") or item.get("sum") or item.get("total"))
+            if alt_total and alt_total > legacy_price:
+                unit_price  = legacy_price
+                total_price = alt_total
+            else:
+                # Нет альтернативного поля — не угадываем, помечаем как unit_price
+                unit_price = legacy_price
+        else:
+            total_price = legacy_price
+
+    # ── Восстановление отсутствующих полей ────────────────────────
+    if unit_price and quantity and quantity > 0 and total_price is None:
+        total_price = round(unit_price * quantity, 2)
+
+    if total_price and quantity and quantity > 0 and unit_price is None:
+        unit_price = round(total_price / quantity, 2)
+
+    if total_price and unit_price and unit_price > 0 and quantity is None:
+        quantity = round(total_price / unit_price, 4)
+
+    return {
+        "name":         name,
         "canonical_name": canonicalize(name),
-        "price": _coerce_float(item.get("price", 0)),
-        "quantity": _coerce_float(item.get("quantity", 1) or 1),
-        "department": department,
-        "contractor": contractor,
-        "source_file": source_file,
-        "source": source_file,
-        "unit": normalize_unit(item.get("unit", "")),
-        "date": date,
+        "quantity":     quantity,
+        "unit":         unit,
+        "unit_price":   unit_price,
+        "total_price":  total_price,
+        "contractor":   contractor,
+        "date":         date,
+        "source_file":  source_f,
+        # Совместимость со scorer.py (использует item.get("price"))
     }
 
-    # Добавляем другие поля если они есть
-    for key in ("currency", "description", "vat", "code"):
-        if key in item:
-            normalized[key] = item[key]
 
-    return normalized
-
-
-def normalize_items(items: list, source: str = "") -> list:
+def normalize_items(items: list[dict], source: str = "") -> list[dict]:
     result = []
     for item in items or []:
         n = normalize_item(item, source=source)
-        if n.get("name") or n.get("contractor") or n.get("date"):  # Сохраняем даже без имени если есть контрагент/дата
-            result.append(n)
+        if not n["name"] and not n["total_price"]:
+            continue
+        result.append(n)
     return result

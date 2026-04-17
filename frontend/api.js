@@ -23,7 +23,46 @@ export async function analyze(documents) {
     body:    JSON.stringify(documents),
   })
   if (!r.ok) throw new Error(`Analyze failed: ${r.status}`)
-  return r.json()
+  return r.json()  // { job_id, status }
+}
+
+/**
+ * Polling job до завершения.
+ * onProgress(progress: 0-100, message: string) — callback для UI.
+ * Возвращает итоговый объект job когда status === 'done'.
+ * Бросает ошибку если status === 'error'.
+ */
+export async function pollJob(job_id, onProgress = null) {
+  const INTERVAL_MS = 1000   // опрос каждую секунду
+  const TIMEOUT_MS  = 300000 // максимум 5 минут
+
+  const start = Date.now()
+
+  while (true) {
+    if (Date.now() - start > TIMEOUT_MS) {
+      throw new Error('Анализ занял слишком много времени (>5 мин). Попробуй снова.')
+    }
+
+    const r = await fetch(`${BASE}/job/${job_id}`)
+    if (!r.ok) throw new Error(`Job status failed: ${r.status}`)
+
+    const job = await r.json()
+
+    if (onProgress) {
+      onProgress(job.progress || 0, job.message || '')
+    }
+
+    if (job.status === 'done') {
+      return job
+    }
+
+    if (job.status === 'error') {
+      throw new Error(job.message || 'Ошибка анализа на сервере')
+    }
+
+    // queued / extracting / analyzing / building_graph → ждём
+    await new Promise(resolve => setTimeout(resolve, INTERVAL_MS))
+  }
 }
 
 export async function getResults() {

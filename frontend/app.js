@@ -1,7 +1,5 @@
 // frontend/app.js
-// Главная логика UI
-
-import { uploadFiles, analyze, getResults, getGraph } from './api.js'
+import { uploadFiles, analyze, pollJob, getResults, getGraph } from './api.js'
 import { renderGraph, fitGraph, zoomIn, zoomOut, destroyGraph, resizeGraph } from './graph.js'
 
 let selectedFiles = []
@@ -10,20 +8,33 @@ let sortCol       = 'score'
 let sortDir       = -1
 let filterRisk    = 'ALL'
 
+const BASE = 'http://127.0.0.1:8000'
+
 
 // ─── Инициализация ────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   setupDropZone()
-  setupTabs()
   document.getElementById('file-input').addEventListener('change', e =>
     addFiles(Array.from(e.target.files)))
   document.getElementById('btn-analyze').addEventListener('click', runAnalyze)
-  document.getElementById('btn-clear').addEventListener('click', clearAll)
-  document.getElementById('btn-fit').addEventListener('click', fitGraph)
-  document.getElementById('btn-zoom-in').addEventListener('click', zoomIn)
-  document.getElementById('btn-zoom-out').addEventListener('click', zoomOut)
+  document.getElementById('btn-report').addEventListener('click', downloadReport)
 })
+
+
+// ─── Tabs ─────────────────────────────────────────────────────────
+
+window.switchTab = function(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
+  document.querySelectorAll('.tab-content').forEach(t => {
+    t.classList.remove('active')
+    t.style.display = 'none'
+  })
+  if (el) el.classList.add('active')
+  const content = document.getElementById(`tab-${name}`)
+  if (content) { content.classList.add('active'); content.style.display = 'flex' }
+  if (name === 'graph') setTimeout(resizeGraph, 30)
+}
 
 
 // ─── Drag & Drop ──────────────────────────────────────────────────
@@ -36,7 +47,6 @@ function setupDropZone() {
     e.preventDefault(); zone.classList.remove('active')
     addFiles(Array.from(e.dataTransfer.files))
   })
-  zone.addEventListener('click', () => document.getElementById('file-input').click())
 }
 
 
@@ -79,10 +89,11 @@ function renderFileList() {
   )
 }
 
-function clearAll() {
+window.clearAll = function() {
   selectedFiles = []; allResults = []
   renderFileList(); resetResults()
   document.getElementById('file-input').value = ''
+  document.getElementById('btn-report').disabled = true
   destroyGraph()
 }
 
@@ -93,22 +104,30 @@ async function runAnalyze() {
   if (!selectedFiles.length) return
   const btn = document.getElementById('btn-analyze')
   btn.disabled = true; btn.textContent = '... АНАЛИЗ'
-  setProgress(10)
+  setProgress(5)
 
   try {
     const uploadData = await uploadFiles(selectedFiles)
-    setProgress(40)
+    setProgress(20)
 
     const documents = (uploadData.files || []).map(f => ({
       filename:    f.original_name || '',
       department:  '',
       contractor:  '',
       source_file: f.original_name || '',
-      items:       f.items || [],
+      raw_text:    f.raw_text || '',
+      items:       f.items   || [],
     }))
 
-    await analyze(documents)
-    setProgress(70)
+    const { job_id } = await analyze(documents)
+    setProgress(30)
+
+    await pollJob(job_id, (progress, message) => {
+      setProgress(30 + Math.round(progress * 0.6))
+      btn.textContent = message || '... АНАЛИЗ'
+    })
+
+    setProgress(92)
 
     const [resultsData, graphData] = await Promise.all([getResults(), getGraph()])
     setProgress(100)
@@ -117,6 +136,16 @@ async function runAnalyze() {
     showResultsContent()
     renderTable()
     renderGraph(graphData)
+
+    document.getElementById('btn-report').disabled = false
+
+    const rawOut   = document.getElementById('raw-output')
+    const emptyRaw = document.getElementById('empty-raw')
+    if (rawOut && emptyRaw) {
+      rawOut.textContent = JSON.stringify(resultsData, null, 2)
+      rawOut.style.display = 'block'
+      emptyRaw.style.display = 'none'
+    }
 
     const anomalies = allResults.filter(r => r.score >= 20).length
     showToast(`✓ ${allResults.length} позиций · аномалий: ${anomalies}`, 'success')
@@ -127,6 +156,37 @@ async function runAnalyze() {
   } finally {
     btn.disabled = false; btn.textContent = '▶ ЗАПУСТИТЬ АНАЛИЗ'
     setTimeout(() => setProgress(0), 800)
+  }
+}
+
+
+// ─── Скачивание отчёта ────────────────────────────────────────────
+
+async function downloadReport() {
+  const btn = document.getElementById('btn-report')
+  btn.disabled = true; btn.textContent = '... ГЕНЕРАЦИЯ'
+  try {
+    const r = await fetch(`${BASE}/report`)
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.status }))
+      throw new Error(err.detail || `Ошибка ${r.status}`)
+    }
+    const blob = await r.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    const now  = new Date()
+    const ts   = now.toISOString().slice(0,19).replace('T','_').replaceAll(':','')
+    a.href     = url
+    a.download = `report_${ts}.docx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    showToast('✓ Отчёт скачан', 'success')
+  } catch (err) {
+    showToast(`✕ ${err.message}`, 'error')
+  } finally {
+    btn.disabled = false; btn.textContent = '↓ СКАЧАТЬ ОТЧЁТ .DOCX'
   }
 }
 
@@ -155,6 +215,37 @@ window.sortBy = function(col) {
   renderTable()
 }
 
+// Краткие метки для объяснений
+const EXPL_MAP = [
+  ['Размытая формулировка',        '⚠ Размытая формулировка'],
+  ['Возможное дробление',          '✂ Дробление'],
+  ['Единственный поставщик',       '🔒 Один поставщик'],
+  ['Подозрительно круглая сумма',  '🔢 Круглая сумма'],
+  ['Единственное упоминание',      'ℹ Одна запись'],
+  ['Количество = 0',               '⚠ Кол-во = 0'],
+  ['Указана цена',                 '⚠ Нет объёма'],
+  ['Указан объём',                 '⚠ Нет цены'],
+  ['Сумма',                        '✗ Сумма ≠ цена×кол'],
+  ['Объём расходится >50%',        '📊 Расхождение >50%'],
+  ['Объём расходится >20%',        '📊 Расхождение >20%'],
+  ['Разные единицы',               '📐 Разные ед.'],
+  ['Цена',                         '📈 Откл. цены'],
+  ['Закупается в',                 '📋 Дубль по отделам'],
+  ['Подозрительный контрагент',    '🚫 Стоп-лист'],
+  ['Частые закупки',               '🕐 Частые закупки'],
+  ['Высокая центральность',        '🕸 Центр. узел'],
+]
+
+function shortenExplanation(explanation) {
+  if (!explanation || explanation === '—') return '—'
+  return explanation.split(' | ').map(part => {
+    for (const [key, label] of EXPL_MAP) {
+      if (part.startsWith(key)) return label
+    }
+    return part.length > 35 ? part.slice(0, 32) + '…' : part
+  }).join(' · ')
+}
+
 function renderTable() {
   if (!allResults.length) return
   const body   = document.getElementById('results-body')
@@ -175,6 +266,7 @@ function renderTable() {
     const name  = r.item || r.name || '—'
     const depts = (r.departments || []).join(' · ') || ''
     const cls   = r.risk_level === 'CRITICAL' ? 'row-critical' : r.risk_level === 'HIGH' ? 'row-high' : ''
+    const expl  = shortenExplanation(r.explanation)
     return `<tr class="${cls}">
       <td style="white-space:nowrap">
         <div class="score-bar">
@@ -187,26 +279,9 @@ function renderTable() {
         ${depts ? `<div class="item-depts">${depts}</div>` : ''}
       </td>
       <td><span class="badge badge-${r.risk_level}">${r.risk_level}</span></td>
-      <td><div class="explanation">${r.explanation || '—'}</div></td>
+      <td><div class="explanation" title="${(r.explanation||'').replace(/"/g,"'")}">${expl}</div></td>
     </tr>`
   }).join('')
-}
-
-
-// ─── Вкладки ──────────────────────────────────────────────────────
-
-function setupTabs() {
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      const name = tab.dataset.tab
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
-      document.querySelectorAll('.tab-content').forEach(t => { t.classList.remove('active'); t.style.display = 'none' })
-      tab.classList.add('active')
-      const content = document.getElementById(`tab-${name}`)
-      content.classList.add('active'); content.style.display = 'flex'
-      if (name === 'graph') setTimeout(resizeGraph, 30)
-    })
-  })
 }
 
 
@@ -214,15 +289,16 @@ function setupTabs() {
 
 function resetResults() {
   allResults = []
-  document.getElementById('results-body').innerHTML       = ''
+  document.getElementById('results-body').innerHTML        = ''
   document.getElementById('results-content').style.display = 'none'
-  document.getElementById('empty-results').style.display  = 'flex'
-  document.getElementById('empty-graph').style.display    = 'flex'
-  document.getElementById('cy').style.display             = 'none'
-  document.getElementById('graph-legend').style.display   = 'none'
-  document.getElementById('graph-controls').style.display = 'none'
-  document.getElementById('raw-output').style.display     = 'none'
-  document.getElementById('empty-raw').style.display      = 'flex'
+  document.getElementById('empty-results').style.display   = 'flex'
+  document.getElementById('empty-graph').style.display     = 'flex'
+  ;['cy','graph-legend','graph-controls','raw-output'].forEach(id => {
+    const el = document.getElementById(id)
+    if (el) el.style.display = 'none'
+  })
+  const er = document.getElementById('empty-raw')
+  if (er) er.style.display = 'flex'
 }
 
 
