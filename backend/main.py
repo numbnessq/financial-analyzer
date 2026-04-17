@@ -57,9 +57,6 @@ def upload_files(files: list[UploadFile] = File(...)):
             shutil.copyfileobj(file.file, buffer)
 
         parsed = parse_file(save_path)
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"[PARSE] {file.filename}: items={len(parsed.get('items',[]))}, text_len={len(parsed.get('text',''))}, error={parsed.get('error','')}")
         _stored_filenames.append(file.filename)
 
         # Нормализуем items из парсера
@@ -82,6 +79,7 @@ def upload_files(files: list[UploadFile] = File(...)):
 
 def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
     global _stored_results, _stored_graph, _stored_analysis
+
     try:
         _jobs[job_id] = {"status": "extracting", "progress": 10, "message": "Извлечение данных..."}
 
@@ -93,50 +91,48 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
             date        = (doc.get("date") or "").strip()
             metadata    = doc.get("metadata") or {}
 
+            # Подрядчик из метаданных парсера если не передан явно
             if not contractor:
                 contractor = metadata.get("contractor", "")
             if not date:
                 date = metadata.get("date", "")
 
-            # items уже нормализованы в /upload — не нормализуем повторно
+            # Берём items из парсера (уже структурированные)
             existing_items = doc.get("items", [])
 
-            # AI fallback — только если совсем нет items И нет raw_text смысла ждать
-            if not existing_items:
-                raw_text = (doc.get("raw_text") or "").strip()
-                if raw_text:
-                    try:
-                        from backend.pipeline.ai_extractor import extract_items_deterministic
-                        ai_items = extract_items_deterministic(raw_text)  # без Ollama
-                        ai_items = normalize_items(ai_items, source=source_file)
-                        existing_items = attach_source(ai_items, source_file)
-                    except Exception:
-                        existing_items = []
+            # AI fallback только если парсер ничего не нашёл
+            raw_text = doc.get("raw_text", "")
+            if not existing_items and raw_text:
+                ai_items = extract_items(raw_text)
+                ai_items = normalize_items(ai_items, source=source_file)
+                ai_items = attach_source(ai_items, source_file)
+                existing_items = ai_items
 
-            # Обогащаем метаданными
+            # Обогащаем метаданными документа
             enriched = []
             for item in existing_items:
                 it = dict(item)
                 if source_file and not it.get("source_file"):
                     it["source_file"] = source_file
-                if dept       and not it.get("department"):
+                if dept and not it.get("department"):
                     it["department"] = dept
                 if contractor and not it.get("contractor"):
                     it["contractor"] = contractor
-                if date       and not it.get("date"):
+                if date and not it.get("date"):
                     it["date"] = date
                 enriched.append(it)
 
             enriched_docs.append({
                 **doc,
-                "items":      enriched,   # уже нормализованы
+                "items":      normalize_items(enriched, source=source_file),
                 "contractor": contractor,
                 "department": dept,
             })
 
+            progress = 10 + int((i + 1) / len(documents) * 50)
             _jobs[job_id] = {
                 "status":   "extracting",
-                "progress": 10 + int((i + 1) / max(len(documents), 1) * 50),
+                "progress": progress,
                 "message":  f"Обработано файлов: {i+1}/{len(documents)}",
             }
 
@@ -168,21 +164,17 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
                 "status":            "ok",
                 "items_analyzed":    len(aggregated),
                 "total_anomalies":   analysis.get("total_anomalies", 0),
-                "graph_nodes":       len(graph_json.get("nodes", [])),
-                "graph_edges":       len(graph_json.get("edges", [])),
+                "graph_nodes":       len(graph_json["nodes"]),
+                "graph_edges":       len(graph_json["edges"]),
                 "summary":           analysis.get("summary", ""),
-                "high_risk_count":   sum(1 for r in aggregated if r.get("score", 0) >= 70),
-                "medium_risk_count": sum(1 for r in aggregated if 40 <= r.get("score", 0) < 70),
+                "high_risk_count":   sum(1 for r in aggregated if r["score"] >= 70),
+                "medium_risk_count": sum(1 for r in aggregated if 40 <= r["score"] < 70),
             },
         }
 
     except Exception as e:
         import traceback
-        _jobs[job_id] = {
-            "status":   "error",
-            "progress": 0,
-            "message":  str(e) + "\n" + traceback.format_exc(),
-        }
+        _jobs[job_id] = {"status": "error", "progress": 0, "message": str(e) + "\n" + traceback.format_exc()}
 
 
 @app.post("/analyze")
@@ -221,6 +213,33 @@ def get_full_analysis():
     if not _stored_analysis:
         raise HTTPException(404, "Анализ не выполнен. Сначала запусти POST /analyze")
     return _stored_analysis
+
+
+@app.get("/report/save")
+def save_report():
+    if not _stored_results:
+        raise HTTPException(404, "Нет данных для отчёта.")
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                generate_report,
+                results=_stored_results,
+                source_files=_stored_filenames or None,
+            )
+            docx_bytes = future.result(timeout=20)  # максимум 20 секунд
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(504, "Генерация отчёта заняла слишком много времени.")
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка генерации отчёта: {e}")
+
+    from pathlib import Path
+    downloads = Path.home() / "Downloads"
+    downloads.mkdir(exist_ok=True)
+    filename  = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    save_path = downloads / filename
+    save_path.write_bytes(docx_bytes)
+    return {"path": str(save_path), "filename": filename}
 
 
 @app.get("/report")

@@ -171,29 +171,21 @@ async function downloadReport() {
   const btn = document.getElementById('btn-report')
   btn.disabled = true
   btn.textContent = '... ФОРМИРУЕТСЯ'
-
   try {
-    const res = await fetch(`${API}/report`)
+    // Backend сохраняет файл в ~/Downloads и возвращает путь
+    const res = await fetch(`${API}/report/save`)
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       throw new Error(err.detail || `Ошибка сервера: ${res.status}`)
     }
+    const { path, filename } = await res.json()
 
-    const disposition = res.headers.get('Content-Disposition') || ''
-    const match = disposition.match(/filename="?([^"]+)"?/)
-    const filename = match ? match[1] : `report_${Date.now()}.docx`
+    // Открываем файл если Tauri доступен
+    if (window.__TAURI__?.shell?.open) {
+      await window.__TAURI__.shell.open(path)
+    }
 
-    const blob = await res.blob()
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href     = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-
-    showToast(`✓ Отчёт сохранён: ${filename}`, 'success')
+    showToast(`✓ Отчёт сохранён в Downloads: ${filename}`, 'success')
   } catch (err) {
     showToast(`✕ ${err.message}`, 'error')
     console.error(err)
@@ -202,7 +194,6 @@ async function downloadReport() {
     btn.textContent = '↓ СКАЧАТЬ ОТЧЁТ .DOCX'
   }
 }
-
 
 // ─── Таблица ──────────────────────────────────
 

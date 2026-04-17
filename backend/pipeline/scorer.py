@@ -29,6 +29,8 @@ FACTOR_PROBS = {
     "unit_mismatch":            0.50,
     "zero_quantity":            0.65,
     "round_number":             0.25,
+    "total_price_deviation_40": 0.55,  # итоговая сумма расходится >40% между документами
+    "total_price_deviation_15": 0.30,  # итоговая сумма расходится 15-40% между документами
 }
 
 VAGUE_KEYWORDS = {
@@ -113,26 +115,34 @@ def _is_round_number(value: float) -> bool:
 # ─── Проверки ─────────────────────────────────────────────────────
 
 def _check_quantity_deviation(item: dict, group: dict) -> list[str]:
+    """Расхождение объёмов одной позиции между документами."""
+    flags = []
     quantities = [
         _to_float(i.get("quantity", 0))
         for i in group.get("items", [])
         if _to_float(i.get("quantity", 0)) > 0
     ]
     if len(quantities) < 2:
-        return []
-    mean_q = statistics.mean(quantities)
-    if mean_q == 0:
-        return []
+        return flags
+
+    min_q = min(quantities)
+    max_q = max(quantities)
+    if min_q == 0:
+        return flags
+
+    # Считаем отклонение от минимума к максимуму — более чувствительно
+    spread = (max_q - min_q) / min_q * 100
+
     item_qty = _to_float(item.get("quantity", 0))
     if item_qty <= 0:
-        return []
-    dev = _deviation_pct(item_qty, mean_q)
-    if dev > 50:
-        return ["quantity_deviation_50"]
-    if dev > 20:
-        return ["quantity_deviation_20"]
-    return []
+        return flags
 
+    if spread > 30:
+        flags.append("quantity_deviation_50")
+    elif spread > 10:
+        flags.append("quantity_deviation_20")
+
+    return flags
 
 def _check_total_mismatch(item: dict) -> list[str]:
     if item.get("_has_detail") is False:
@@ -172,6 +182,29 @@ def _check_round_number(item: dict) -> list[str]:
         if _is_round_number(val):
             return ["round_number"]
     return []
+
+def _check_total_price_deviation(item: dict, group: dict) -> list[str]:
+    """Сравнивает total_price одной позиции между документами."""
+    flags = []
+    totals = [
+        _to_float(i.get("total_price") or i.get("amount") or i.get("sum") or 0)
+        for i in group.get("items", [])
+        if _to_float(i.get("total_price") or i.get("amount") or i.get("sum") or 0) > 0
+    ]
+    if len(totals) < 2:
+        return flags
+    mean_t = statistics.mean(totals)
+    if mean_t == 0:
+        return flags
+    item_total = _to_float(item.get("total_price") or item.get("amount") or item.get("sum") or 0)
+    if item_total <= 0:
+        return flags
+    dev = abs(item_total - mean_t) / mean_t * 100
+    if dev > 40:
+        flags.append("total_price_deviation_40")
+    elif dev > 15:
+        flags.append("total_price_deviation_15")
+    return flags
 
 
 # ─── Флаги ────────────────────────────────────────────────────────
@@ -234,6 +267,7 @@ def calculate_flags(item: dict, group: dict, graph_context: Dict = None) -> list
     flags.extend(_check_volume_price_integrity(item))
     flags.extend(_check_unit_mismatch(item, group))
     flags.extend(_check_round_number(item))
+    flags.extend(_check_total_price_deviation(item, group))
 
     seen, unique = set(), []
     for f in flags:
@@ -286,11 +320,13 @@ def build_explanation(flags: list[str], item: dict, group: dict) -> str:
         dev = _deviation_pct(unit_price, ref_price)
         parts.append(f"Цена {unit_price:,.0f} отклоняется от средней {ref_price:,.0f} на {dev:.0f}%")
 
-    if "quantity_deviation_50" in flags:
+    if "quantity_deviation_50" in flags or "quantity_deviation_20" in flags:
         qtys = [_to_float(i.get("quantity", 0)) for i in group.get("items", [])
                 if _to_float(i.get("quantity", 0)) > 0]
         if qtys:
-            parts.append(f"Объём расходится >50% (мин {min(qtys):g} / макс {max(qtys):g})")
+            spread = (max(qtys) - min(qtys)) / min(qtys) * 100
+            label = ">30%" if "quantity_deviation_50" in flags else ">10%"
+            parts.append(f"Объём расходится {label} между документами (мин {min(qtys):g} / макс {max(qtys):g})")
     elif "quantity_deviation_20" in flags:
         qtys = [_to_float(i.get("quantity", 0)) for i in group.get("items", [])
                 if _to_float(i.get("quantity", 0)) > 0]
@@ -318,6 +354,17 @@ def build_explanation(flags: list[str], item: dict, group: dict) -> str:
 
     if "round_number" in flags:
         parts.append("Подозрительно круглая сумма — возможные приписки")
+    
+    if "total_price_deviation_40" in flags:
+        totals = [_to_float(i.get("total_price") or 0) for i in group.get("items", [])
+                  if _to_float(i.get("total_price") or 0) > 0]
+        if totals:
+            parts.append(f"Итоговая сумма расходится >40% между документами (мин {min(totals):,.0f} / макс {max(totals):,.0f})")
+    elif "total_price_deviation_15" in flags:
+        totals = [_to_float(i.get("total_price") or 0) for i in group.get("items", [])
+                  if _to_float(i.get("total_price") or 0) > 0]
+        if totals:
+            parts.append(f"Итоговая сумма расходится >15% между документами (мин {min(totals):,.0f} / макс {max(totals):,.0f})")
 
     if "split_suspected" in flags:
         parts.append(f"Возможное дробление — {n_items} записей")

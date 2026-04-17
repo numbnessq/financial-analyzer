@@ -79,8 +79,13 @@ _UNIT_RE = re.compile(
 def _to_float(x: Any) -> float | None:
     if x is None:
         return None
-    s = str(x).strip().replace(" ", "").replace("\xa0", "").replace(",", ".")
-    s = re.sub(r"[^\d.\-]", "", s)
+    s = str(x).strip().replace("\xa0", "").replace(" ", "")
+    # Русский формат цены: '350-00', '7 000 000-00' → дефис как разделитель копеек
+    s = re.sub(r"-\d{2}$", "", s)
+    s = s.replace(",", ".")
+    s = re.sub(r"[^\d.]", "", s)
+    if not s:
+        return None
     try:
         v = float(s)
         return v if v >= 0 else None
@@ -132,7 +137,6 @@ def _detect_column_mapping(header_rows: list[list]) -> dict[str, int]:
         return {}
 
     n_cols = max(len(r) for r in header_rows)
-    # Склеиваем тексты всех заголовочных строк по каждой колонке
     col_texts = [""] * n_cols
     for row in header_rows:
         for ci, cell in enumerate(row):
@@ -140,29 +144,51 @@ def _detect_column_mapping(header_rows: list[list]) -> dict[str, int]:
             if t:
                 col_texts[ci] = (col_texts[ci] + " " + t).strip()
 
-    mapping: dict[str, int] = {}
-    for col_type in _COL_KEYWORDS:
-        best_score = 0
-        best_col   = -1
+    # Колонки с сервисным содержимым (номера, порядок) — исключаем из числовых типов
+    _INDEX_KW = {"номер", "по поряд", "порядк", "поряд", "пози", "№"}
+    index_cols = {
+        ci for ci, t in enumerate(col_texts)
+        if any(kw in t for kw in _INDEX_KW)
+    }
+
+    # Приоритет назначения: специфичные типы раньше общих
+    PRIORITY = ["unit_price", "total_price", "quantity", "unit", "name", "contractor", "date"]
+
+    # Строим матрицу scores[col_type][col_idx]
+    score_matrix: dict[str, dict[int, int]] = {}
+    for col_type in PRIORITY:
+        score_matrix[col_type] = {}
         for ci, text in enumerate(col_texts):
+            # Числовые колонки не назначаем индексным столбцам
+            if col_type in ("unit_price", "total_price", "quantity") and ci in index_cols:
+                continue
             s = _score_col_keyword(text, col_type)
-            if s > best_score:
-                best_score = s
-                best_col   = ci
-        if best_score > 0 and best_col >= 0:
-            # Не перезаписываем уже назначенный индекс другим типом
-            used = set(mapping.values())
-            if best_col not in used:
-                mapping[col_type] = best_col
-            else:
-                # Ищем следующий лучший незанятый
-                scores = sorted(
-                    [(ci, _score_col_keyword(col_texts[ci], col_type))
-                     for ci in range(n_cols) if ci not in used],
-                    key=lambda x: -x[1]
-                )
-                if scores and scores[0][1] > 0:
-                    mapping[col_type] = scores[0][0]
+            if s > 0:
+                score_matrix[col_type][ci] = s
+
+    mapping: dict[str, int] = {}
+    used: set[int] = set()
+
+    for col_type in PRIORITY:
+        candidates = score_matrix[col_type]
+        if not candidates:
+            continue
+        # Среди незанятых — выбираем с максимальным счётом,
+        # при равных — правее (для числовых полей правые колонки вероятнее)
+        free = {ci: s for ci, s in candidates.items() if ci not in used}
+        if not free:
+            # Разрешаем переназначение только если счёт значительно выше
+            all_c = sorted(candidates.items(), key=lambda x: (-x[1], -x[0]))
+            if all_c:
+                mapping[col_type] = all_c[0][0]
+            continue
+
+        best = sorted(
+            free.items(),
+            key=lambda x: (-x[1], -x[0] if col_type in ("unit_price", "total_price") else x[0])
+        )[0][0]
+        mapping[col_type] = best
+        used.add(best)
 
     return mapping
 
@@ -242,7 +268,7 @@ def _parse_row_to_item(row: list, mapping: dict, meta: dict) -> dict | None:
         return row[i] if i is not None and i < len(row) else None
 
     name = _clean_str(cell("name"))
-    # Fallback: если name по маппингу пустой — ищем первую длинную нечисловую ячейку
+    # Fallback: merged cells могут сдвигать name на соседний столбец
     if not name or _is_junk_row(name):
         for ci, val in enumerate(row):
             s = _clean_str(val)
@@ -252,6 +278,7 @@ def _parse_row_to_item(row: list, mapping: dict, meta: dict) -> dict | None:
                     break
     if not name or _is_junk_row(name):
         return None
+
     # Числовые поля
     quantity    = _to_float(cell("quantity"))
     unit_price  = _to_float(cell("unit_price"))

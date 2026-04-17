@@ -77,9 +77,11 @@ def group_items(items: list[dict]) -> list[dict]:
 
         item_name  = item.get("canonical_name") or canonicalize(item.get("name", ""))
         contractor = item.get("contractor", "")
-        group_key  = f"{item_name}|{contractor}" if contractor else item_name
+        # Группируем ТОЛЬКО по названию позиции — contractor не включаем в ключ
+        # чтобы позиции из разных документов (КС-2, КС-6а) объединялись в одну группу
+        group_key  = item_name
 
-        if not item_name and not contractor:
+        if not item_name:
             continue
 
         match = find_best_match(group_key, group_keys)
