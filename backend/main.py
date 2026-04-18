@@ -124,7 +124,7 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
 
             enriched_docs.append({
                 **doc,
-                "items":      normalize_items(enriched, source=source_file),
+                "items":      enriched,   # убрать normalize_items отсюда
                 "contractor": contractor,
                 "department": dept,
             })
@@ -236,7 +236,8 @@ def save_report():
     from pathlib import Path
     downloads = Path.home() / "Downloads"
     downloads.mkdir(exist_ok=True)
-    filename  = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    from datetime import datetime as _dt
+    filename  = f"report_{_dt.now().strftime('%Y%m%d_%H%M%S')}.docx"
     save_path = downloads / filename
     save_path.write_bytes(docx_bytes)
     return {"path": str(save_path), "filename": filename}
