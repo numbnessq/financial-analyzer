@@ -51,7 +51,8 @@ def main():
         os.chmod(dest, 0o755)
     shutil.rmtree(os.path.join("src-tauri", "binaries", "_tmp"), ignore_errors=True)
 
-    print(f"[build_backend] ✓ {dest}")
+    print(f"[build_backend] OK: {dest}")
+
 
 if __name__ == "__main__":
     main()
