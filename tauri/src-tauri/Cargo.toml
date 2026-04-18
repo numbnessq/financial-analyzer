@@ -1,17 +1,19 @@
 [package]
-name = "financial-analyzer"
+name    = "financial-analyzer"
 version = "0.1.0"
-description = "Анализатор финансовых документов"
-authors = ["you"]
 edition = "2021"
 
-# ВАЖНО: build.rs нужен Tauri для кодогенерации
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "1", features = [] }
 
 [dependencies]
-tauri      = { version = "1.6", features = [ "fs-all", "dialog-all", "shell-open"] }
+tauri = { version = "1", features = [
+    "updater",
+    "shell-sidecar",
+] }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
-# reqwest УБРАН — он конфликтует с tokio runtime в Tauri 1.x
-# Для ping используем std::thread::sleep вместо polling
+
+[features]
+default         = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

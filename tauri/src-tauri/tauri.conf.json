@@ -1,70 +1,57 @@
 {
-  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "build": {
-    "beforeBuildCommand": "",
-    "beforeDevCommand": "/Users/dmitrij/PyCharmMiscProject/project/venv/bin/python3 /Users/dmitrij/PyCharmMiscProject/project/scripts/start_backend.py",
-    "devPath": "http://127.0.0.1:3000",
-    "distDir": "../../frontend"
+    "beforeDevCommand":   "python3 ../scripts/start_backend.py",
+    "beforeBuildCommand": "python3 ../scripts/build_backend.py",
+    "devPath":   "http://localhost:3000",
+    "distDir":   "../../frontend",
+    "withGlobalTauri": true
   },
   "package": {
-    "productName": "Financial Analyzer",
-    "version": "0.1.0"
+    "productName": "financial-analyzer",
+    "version":     "0.1.0"
   },
   "tauri": {
     "allowlist": {
-      "all": false,
+      "all":   false,
       "shell": {
-        "all": false,
-        "open": true
-      },
-      "fs": {
-        "all": true,
-        "scope": ["$DOWNLOAD/*", "$DOCUMENT/*", "$DESKTOP/*", "$HOME/*"]
-      },
-      "dialog": {
-        "all": true
+        "sidecar": true,
+        "scope": [
+          { "name": "binaries/backend", "sidecar": true }
+        ]
       }
     },
     "bundle": {
-      "active": true,
-      "category": "Business",
-      "copyright": "",
-      "deb": { "depends": [] },
-      "externalBin": [],
-      "icon": [],
-      "identifier": "com.financial-analyzer.app",
-      "longDescription": "Система анализа финансовых документов",
-      "macOS": {
-        "entitlements": null,
-        "exceptionDomain": "",
-        "frameworks": [],
-        "providerShortName": null,
-        "signingIdentity": null
-      },
-      "resources": [],
-      "shortDescription": "Анализатор документов",
-      "targets": "all",
-      "windows": {
-        "certificateThumbprint": null,
-        "digestAlgorithm": "sha256",
-        "timestampUrl": ""
-      }
-    },
-    "security": {
-      "csp": null
+      "active":     true,
+      "targets":    "all",
+      "identifier": "com.yourcompany.financial-analyzer",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "externalBin": ["binaries/backend"]
     },
     "updater": {
-      "active": false
+      "active":    true,
+      "dialog":    true,
+      "pubkey":    "REPLACE_WITH_YOUR_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/YOUR_USERNAME/YOUR_REPO/releases/latest/download/latest.json"
+      ]
+    },
+    "security": {
+      "csp": "default-src 'self'; connect-src http://localhost:8000"
     },
     "windows": [
       {
-        "fullscreen": false,
-        "height": 820,
-        "resizable": true,
-        "title": "Financial Analyzer",
-        "width": 1280,
-        "minWidth": 900,
-        "minHeight": 600
+        "label":      "main",
+        "title":      "Financial Analyzer",
+        "width":      1280,
+        "height":     800,
+        "resizable":  true,
+        "fullscreen": false
       }
     ]
   }
