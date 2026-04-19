@@ -1,4 +1,3 @@
-cat > /Users/dmitrij/PyCharmMiscProject/project/backend/requirements.txt << 'EOF'
 numpy
 pandas
 matplotlib
