@@ -42,7 +42,7 @@
       ]
     },
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src http://127.0.0.1:8000 http://localhost:8000; img-src 'self' data: blob:;"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src http://127.0.0.1:8000 http://localhost:8000; img-src 'self' data: blob:;"
     },
     "windows": [
       {

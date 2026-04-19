@@ -1,38 +1,20 @@
-# Core
-
+cat > /Users/dmitrij/PyCharmMiscProject/project/backend/requirements.txt << 'EOF'
 numpy
 pandas
-
-# Visualization (если строишь графики)
-
 matplotlib
 plotly
-
-# API (если у тебя backend на FastAPI)
-
 fastapi
 uvicorn
-
-# Data validation
-
 pydantic
-
-# File handling (если работаешь с Excel / CSV)
-
 openpyxl
-
-# HTTP (если дергаешь внешние источники)
-
 requests
-
-# Packaging / build
-
 pyinstaller
-
-# Optional (если есть аналитика сложнее)
-
 scipy
-
-# Dev (по желанию)
-
 pytest
+python-docx
+pdfplumber
+rapidfuzz
+networkx
+python-multipart
+aiofiles
+EOF
