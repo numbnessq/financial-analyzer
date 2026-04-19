@@ -16,4 +16,3 @@ rapidfuzz
 networkx
 python-multipart
 aiofiles
-EOF
