@@ -1,4 +1,11 @@
-# backend/main.py
+import sys
+import os
+
+# Фикс для PyInstaller — добавляем папку с бинарём в sys.path
+# чтобы "from backend.pipeline.xxx" работало внутри собранного бинаря
+if getattr(sys, 'frozen', False):
+    sys.path.insert(0, os.path.dirname(sys.executable))
+
 import uuid
 import shutil
 from pathlib import Path
@@ -59,7 +66,6 @@ def upload_files(files: list[UploadFile] = File(...)):
         parsed = parse_file(save_path)
         _stored_filenames.append(file.filename)
 
-        # Нормализуем items из парсера
         parsed_items = parsed.get("items", [])
         norm_items   = normalize_items(parsed_items, source=file.filename) if parsed_items else []
 
@@ -68,7 +74,6 @@ def upload_files(files: list[UploadFile] = File(...)):
             "saved_as":      unique_name,
             "size_bytes":    save_path.stat().st_size,
             "parsed":        parsed,
-            # Передаём структурированные items из парсера
             "items":         norm_items,
             "raw_text":      parsed.get("text", "") if parsed.get("success") else "",
             "metadata":      parsed.get("metadata", {}),
@@ -91,16 +96,13 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
             date        = (doc.get("date") or "").strip()
             metadata    = doc.get("metadata") or {}
 
-            # Подрядчик из метаданных парсера если не передан явно
             if not contractor:
                 contractor = metadata.get("contractor", "")
             if not date:
                 date = metadata.get("date", "")
 
-            # Берём items из парсера (уже структурированные)
             existing_items = doc.get("items", [])
 
-            # AI fallback только если парсер ничего не нашёл
             raw_text = doc.get("raw_text", "")
             if not existing_items and raw_text:
                 ai_items = extract_items(raw_text)
@@ -108,7 +110,6 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
                 ai_items = attach_source(ai_items, source_file)
                 existing_items = ai_items
 
-            # Обогащаем метаданными документа
             enriched = []
             for item in existing_items:
                 it = dict(item)
@@ -124,7 +125,7 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
 
             enriched_docs.append({
                 **doc,
-                "items":      enriched,   # убрать normalize_items отсюда
+                "items":      enriched,
                 "contractor": contractor,
                 "department": dept,
             })
@@ -227,13 +228,12 @@ def save_report():
                 results=_stored_results,
                 source_files=_stored_filenames or None,
             )
-            docx_bytes = future.result(timeout=20)  # максимум 20 секунд
+            docx_bytes = future.result(timeout=20)
     except concurrent.futures.TimeoutError:
         raise HTTPException(504, "Генерация отчёта заняла слишком много времени.")
     except Exception as e:
         raise HTTPException(500, f"Ошибка генерации отчёта: {e}")
 
-    from pathlib import Path
     downloads = Path.home() / "Downloads"
     downloads.mkdir(exist_ok=True)
     from datetime import datetime as _dt
@@ -262,3 +262,8 @@ def get_report():
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)

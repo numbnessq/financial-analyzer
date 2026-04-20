@@ -7,7 +7,7 @@ TRIPLE_MAP = {
     ("win32",  "amd64"):  "x86_64-pc-windows-msvc",
     ("win32",  "x86_64"): "x86_64-pc-windows-msvc",
     ("linux",  "x86_64"): "x86_64-unknown-linux-gnu",
-    ("linux",  "aarch64"):"aarch64-unknown-linux-gnu",
+    ("linux",  "aarch64"): "aarch64-unknown-linux-gnu",
 }
 
 def get_triple():
@@ -22,25 +22,35 @@ def main():
     triple = get_triple()
     ext    = ".exe" if sys.platform == "win32" else ""
 
-    # Пути относительно tauri/ (откуда запускает Tauri CLI)
-    out_dir  = os.path.join("src-tauri", "binaries")
+    out_dir = os.path.join("src-tauri", "binaries")
     os.makedirs(out_dir, exist_ok=True)
 
-    # backend/main.py — относительно корня проекта, но скрипт запускается из tauri/
-    backend_entry = os.path.join("..", "backend", "main.py")
+    # Корень проекта (на уровень выше tauri/)
+    project_root  = os.path.abspath(os.path.join(".."))
+    backend_entry = os.path.join(project_root, "backend", "main.py")
 
     subprocess.run([
         sys.executable, "-m", "PyInstaller",
         "--onefile", "--clean",
         "--name", "backend",
         "--distpath", os.path.join("src-tauri", "binaries", "_tmp"),
-        # Скрытые импорты для uvicorn
+        # Добавляем корень проекта в PYTHONPATH — чтобы "from backend.pipeline..." работало
+        "--paths", project_root,
         "--hidden-import=uvicorn.logging",
         "--hidden-import=uvicorn.loops",
         "--hidden-import=uvicorn.loops.auto",
         "--hidden-import=uvicorn.protocols.http.auto",
         "--hidden-import=uvicorn.protocols.websockets.auto",
         "--hidden-import=uvicorn.lifespan.on",
+        "--hidden-import=backend.pipeline.parser",
+        "--hidden-import=backend.pipeline.ai_extractor",
+        "--hidden-import=backend.pipeline.normalizer",
+        "--hidden-import=backend.pipeline.source_mapper",
+        "--hidden-import=backend.pipeline.matcher",
+        "--hidden-import=backend.pipeline.analyzer",
+        "--hidden-import=backend.pipeline.scorer",
+        "--hidden-import=backend.pipeline.explainer",
+        "--hidden-import=backend.pipeline.graph_builder",
         backend_entry
     ], check=True)
 
@@ -52,7 +62,6 @@ def main():
     shutil.rmtree(os.path.join("src-tauri", "binaries", "_tmp"), ignore_errors=True)
 
     print(f"[build_backend] OK: {dest}")
-
 
 if __name__ == "__main__":
     main()
