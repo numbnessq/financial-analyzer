@@ -26,7 +26,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     # Корень проекта (на уровень выше tauri/)
-    project_root  = os.path.abspath(os.path.join(".."))
+    project_root  = os.path.abspath(os.path.join("."))
     backend_entry = os.path.join(project_root, "backend", "main.py")
 
     subprocess.run([
@@ -34,14 +34,25 @@ def main():
         "--onefile", "--clean",
         "--name", "backend",
         "--distpath", os.path.join("src-tauri", "binaries", "_tmp"),
-        # Добавляем корень проекта в PYTHONPATH — чтобы "from backend.pipeline..." работало
         "--paths", project_root,
+        "--hidden-import=fastapi",
+        "--hidden-import=fastapi.middleware.cors",
+        "--hidden-import=uvicorn",
         "--hidden-import=uvicorn.logging",
         "--hidden-import=uvicorn.loops",
         "--hidden-import=uvicorn.loops.auto",
+        "--hidden-import=uvicorn.protocols",
+        "--hidden-import=uvicorn.protocols.http",
         "--hidden-import=uvicorn.protocols.http.auto",
+        "--hidden-import=uvicorn.protocols.http.h11_impl",
         "--hidden-import=uvicorn.protocols.websockets.auto",
         "--hidden-import=uvicorn.lifespan.on",
+        "--hidden-import=starlette",
+        "--hidden-import=starlette.routing",
+        "--hidden-import=pydantic",
+        "--hidden-import=anyio",
+        "--hidden-import=anyio.abc",
+        "--hidden-import=anyio._backends._asyncio",
         "--hidden-import=backend.pipeline.parser",
         "--hidden-import=backend.pipeline.ai_extractor",
         "--hidden-import=backend.pipeline.normalizer",
