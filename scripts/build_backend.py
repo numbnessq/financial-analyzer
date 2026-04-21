@@ -26,7 +26,9 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     # Корень проекта (на уровень выше tauri/)
-    project_root  = os.path.abspath(os.path.join("."))
+    # Определяем корень проекта относительно расположения скрипта
+    script_dir    = os.path.dirname(os.path.abspath(__file__))
+    project_root  = os.path.dirname(script_dir)  # scripts/ -> project root
     backend_entry = os.path.join(project_root, "backend", "main.py")
 
     subprocess.run([
