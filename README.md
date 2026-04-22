@@ -13,6 +13,7 @@
 project/
 ├── backend/
 │   ├── main.py
+│   ├── requirements.txt
 │   └── pipeline/
 │       ├── parser.py
 │       ├── ai_extractor.py
@@ -27,20 +28,21 @@ project/
 ├── frontend/
 │   ├── index.html
 │   ├── styles.css
-│   ├── app.js        ← логика UI
-│   ├── api.js        ← запросы к backend
-│   └── graph.js      ← Cytoscape визуализация
+│   ├── app.js
+│   ├── api.js
+│   └── graph.js
 │
-├── tauri/
+├── scripts/
+│   ├── start_backend.py     ← dev-режим
+│   └── build_backend.py     ← сборка бинарника через PyInstaller
+│
+├── src-tauri/
+│   ├── binaries/            ← собранный backend-<triple>
 │   └── src-tauri/
 │       ├── src/main.rs
 │       ├── Cargo.toml
 │       └── tauri.conf.json
 │
-├── scripts/
-│   └── start_backend.py
-│
-├── requirements.txt
 └── README.md
 ```
 
@@ -48,12 +50,10 @@ project/
 
 ## Требования
 
-**Python:** 3.11+, Ollama с моделью `mistral` — https://ollama.com
-
-**Rust + Tauri:** Rust — https://rustup.rs, затем:
-```bash
-cargo install tauri-cli
-```
+- **Python 3.11+**
+- **Rust** — https://rustup.rs
+- **Node.js 20+**
+- **Ollama** с моделью `mistral` — https://ollama.com
 
 ---
 
@@ -61,27 +61,36 @@ cargo install tauri-cli
 
 ```bash
 python -m venv venv
-source venv/bin/activate   # macOS/Linux
-pip install -r requirements.txt
+source venv/bin/activate        # macOS/Linux
+# venv\Scripts\activate         # Windows
+
+pip install -r backend/requirements.txt
 
 ollama pull mistral
 ollama serve
 ```
 
+Установка Tauri CLI:
+
+```bash
+cd tauri
+npm ci
+```
+
 ---
 
-## Запуск
+## Запуск (dev)
 
-**Только backend + браузер:**
+```bash
+cd tauri
+npm run tauri dev
+```
+
+Только backend + браузер:
+
 ```bash
 uvicorn backend.main:app --reload
 # открыть frontend/index.html в браузере
-```
-
-**Полное Tauri приложение:**
-```bash
-cd tauri
-cargo tauri dev
 ```
 
 ---
@@ -90,12 +99,36 @@ cargo tauri dev
 
 ```bash
 cd tauri
-cargo tauri build
+npm run tauri build
 ```
 
 - macOS → `.dmg`
 - Windows → `.msi`
 - Linux → `.AppImage`
+
+Бинарник backend собирается автоматически через `scripts/build_backend.py` (PyInstaller).
+
+---
+
+## Релизы (GitHub Actions)
+
+Новый релиз запускается тегом:
+
+```bash
+git tag v0.1.1 && git push origin v0.1.1
+```
+
+CI собирает приложение под macOS, Windows и Linux и публикует assets в GitHub Releases.
+
+---
+
+## macOS: ошибка «приложение повреждено»
+
+macOS блокирует неподписанные приложения. После установки выполни:
+
+```bash
+xattr -cr /Applications/financial-analyzer.app
+```
 
 ---
 
@@ -128,14 +161,10 @@ cargo tauri build
 
 ---
 
-## VS Code + Git
-
-Просто открой папку проекта, установи расширения `rust-analyzer` и `Python`. Git работает как обычно:
+## Git
 
 ```bash
-git add .
-git commit -m "описание"
-git push
+git add -A && git commit -m "описание" && git push
 ```
 
 ---
