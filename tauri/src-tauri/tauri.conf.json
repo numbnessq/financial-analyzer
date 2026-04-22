@@ -15,6 +15,7 @@
       "all":   false,
       "shell": {
         "sidecar": true,
+        "open": true,
         "scope": [
           { "name": "binaries/backend", "sidecar": true }
         ]
