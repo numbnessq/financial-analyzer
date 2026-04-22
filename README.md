@@ -28,7 +28,8 @@ project/
 │
 ├── frontend/
 │   ├── index.html
-│   ├── styles.css
+│   ├── updater.js
+│   ├── render.js
 │   ├── app.js
 │   ├── api.js
 │   └── graph.js
