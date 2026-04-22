@@ -14,6 +14,7 @@ project/
 ├── backend/
 │   ├── main.py
 │   ├── requirements.txt
+│   ├── models/
 │   └── pipeline/
 │       ├── parser.py
 │       ├── ai_extractor.py
@@ -32,17 +33,21 @@ project/
 │   ├── api.js
 │   └── graph.js
 │
-├── scripts/
-│   ├── start_backend.py     ← dev-режим
-│   └── build_backend.py     ← сборка бинарника через PyInstaller
-│
-├── src-tauri/
-│   ├── binaries/            ← собранный backend-<triple>
+├── tauri/
+│   ├── package.json
 │   └── src-tauri/
-│       ├── src/main.rs
+│       ├── binaries/          ← собранный backend-<triple>
+│       ├── icons/
+│       ├── src/
+│       │   └── main.rs
 │       ├── Cargo.toml
 │       └── tauri.conf.json
 │
+├── scripts/
+│   ├── start_backend.py       ← dev-режим
+│   └── build_backend.py       ← сборка бинарника через PyInstaller
+│
+├── uploads/                   ← загруженные пользователем файлы
 └── README.md
 ```
 
@@ -70,7 +75,7 @@ ollama pull mistral
 ollama serve
 ```
 
-Установка Tauri CLI:
+Установка зависимостей Tauri:
 
 ```bash
 cd tauri
@@ -132,6 +137,14 @@ xattr -cr /Applications/financial-analyzer.app
 
 ---
 
+## Git
+
+```bash
+git add -A && git commit -m "описание" && git push
+```
+
+---
+
 ## API
 
 | Метод | URL | Описание |
@@ -158,14 +171,6 @@ xattr -cr /Applications/financial-analyzer.app
 | `split_suspected` | 0.45 | Дробление закупки |
 
 Уровни: **LOW** 0–19 · **MEDIUM** 20–39 · **HIGH** 40–69 · **CRITICAL** 70+
-
----
-
-## Git
-
-```bash
-git add -A && git commit -m "описание" && git push
-```
 
 ---
 
