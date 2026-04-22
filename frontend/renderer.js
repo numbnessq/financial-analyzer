@@ -172,7 +172,6 @@ async function downloadReport() {
   btn.disabled = true
   btn.textContent = '... ФОРМИРУЕТСЯ'
   try {
-    // Backend сохраняет файл в ~/Downloads и возвращает путь
     const res = await fetch(`${API}/report/save`)
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
@@ -180,9 +179,10 @@ async function downloadReport() {
     }
     const { path, filename } = await res.json()
 
-    // Открываем файл если Tauri доступен
-    if (window.__TAURI__?.shell?.open) {
-      await window.__TAURI__.shell.open(path)
+    // Открываем через open команду macOS/Linux или start на Windows
+    if (window.__TAURI__) {
+      const { Command } = window.__TAURI__.shell
+      await new Command('open-file', [path]).execute()
     }
 
     showToast(`✓ Отчёт сохранён в Downloads: ${filename}`, 'success')
