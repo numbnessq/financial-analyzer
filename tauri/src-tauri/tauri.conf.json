@@ -1,0 +1,58 @@
+{
+  "build": {
+    "beforeDevCommand":   "python3 ../scripts/start_backend.py",
+    "beforeBuildCommand": "python3 ../scripts/build_backend.py",
+    "devPath":   "http://localhost:3000",
+    "distDir":   "../../frontend",
+    "withGlobalTauri": true
+  },
+  "package": {
+    "productName": "financial-analyzer",
+    "version":     "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all":   false,
+      "shell": {
+        "sidecar": true,
+        "open": true,
+        "scope": [
+          { "name": "binaries/backend", "sidecar": true }
+        ]
+      }
+    },
+    "bundle": {
+      "active":     true,
+      "targets":    "all",
+      "identifier": "com.yourcompany.financial-analyzer",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "externalBin": ["binaries/backend"]
+    },
+    "updater": {
+      "active":    true,
+      "dialog":    true,
+      "pubkey":    "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQyRENGRjlDRjgxN0YwRUQKUldUdDhCZjRuUC9jMHRUSExnTlprV2tIQWhIcG55aFBSMGJ2cEJZRzdqSW5XUXQ0bmJIUmIzcWMK",
+      "endpoints": [
+        "https://github.com/numbnessq/financial-analyzer/releases/latest/download/latest.json"
+      ]
+    },
+    "security": {
+      "csp": null },
+    "windows": [
+      {
+        "label":      "main",
+        "title":      "Financial Analyzer",
+        "width":      1280,
+        "height":     800,
+        "resizable":  true,
+        "fullscreen": false
+      }
+    ]
+  }
+}

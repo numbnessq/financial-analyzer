@@ -1,0 +1,17 @@
+venv/
+uploads/
+.DS_Store
+__pycache__/
+*.pyc
+node_modules/
+tauri/src-tauri/target/
+tauri/src-tauri/binaries/backend-*
+dist_pyinstaller/
+build/
+tauri/build/
+backend.spec
+tauri/backend.spec
+src-tauri/binaries/backend-*
+!src-tauri/binaries/.gitkeep
+__pycache__/
+*.pyc
