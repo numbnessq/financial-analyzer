@@ -12,8 +12,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            backend_name: backend
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            backend_name: backend.exe
           - os: macos-latest
+            target: x86_64-apple-darwin
+            backend_name: backend
 
     runs-on: ${{ matrix.os }}
 
@@ -29,8 +35,26 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Install Python deps
+      - name: Install Python deps + PyInstaller
         run: pip install -r backend/requirements.txt pyinstaller
+
+      - name: Build backend binary (PyInstaller)
+        run: python scripts/build_backend.py
+
+      # Tauri требует бинарь в binaries/ с суффиксом target-triple
+      - name: Get Rust target triple
+        id: triple
+        shell: bash
+        run: |
+          TRIPLE=$(rustc -vV | grep 'host:' | awk '{print $2}')
+          echo "triple=$TRIPLE" >> $GITHUB_OUTPUT
+
+      - name: Copy backend binary to tauri binaries
+        shell: bash
+        run: |
+          mkdir -p tauri/src-tauri/binaries
+          cp dist/backend/${{ matrix.backend_name }} \
+             tauri/src-tauri/binaries/backend-${{ steps.triple.outputs.triple }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
 
       - uses: dtolnay/rust-toolchain@stable
 

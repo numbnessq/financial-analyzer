@@ -2,9 +2,9 @@
   "build": {
     "beforeDevCommand":   "python3 ../scripts/start_backend.py",
     "beforeBuildCommand": "python3 ../scripts/build_backend.py",
-    "devPath":   "http://localhost:3000",
-    "distDir":   "../../frontend",
-    "withGlobalTauri": true
+    "devPath":            "http://localhost:3000",
+    "distDir":            "../../frontend",
+    "withGlobalTauri":    true
   },
   "package": {
     "productName": "financial-analyzer",
@@ -12,12 +12,18 @@
   },
   "tauri": {
     "allowlist": {
-      "all":   false,
+      "all": false,
+      "http": {
+        "all":     true,
+        "request": true,
+        "scope":   ["http://127.0.0.1:8000/*", "http://localhost:8000/*"]
+      },
       "shell": {
         "sidecar": true,
-        "open": true,
+        "open":    true,
+        "execute": true,
         "scope": [
-          { "name": "binaries/backend", "sidecar": true }
+          { "name": "open-file", "cmd": "open", "args": ["$PATH"] }
         ]
       }
     },
@@ -43,7 +49,8 @@
       ]
     },
     "security": {
-      "csp": null },
+      "csp": null
+    },
     "windows": [
       {
         "label":      "main",
