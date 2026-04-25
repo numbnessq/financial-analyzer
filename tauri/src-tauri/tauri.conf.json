@@ -23,8 +23,12 @@
         "open":    true,
         "execute": true,
         "scope": [
+          { "name": "binaries/backend", "sidecar": true },
           { "name": "open-file", "cmd": "open", "args": ["$PATH"] }
         ]
+      },
+      "path": {
+        "all": true
       }
     },
     "bundle": {

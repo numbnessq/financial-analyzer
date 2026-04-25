@@ -1,36 +1,55 @@
 # backend/pipeline/scorer.py
 """
-Вероятностная модель риска.
-risk = 1 - Π(1 - p_i)
+Rule-based + deviation-based скоринг.
+Прозрачность > "умность".
+Каждый флаг имеет фиксированный вес и понятную причину.
+
+v2: интегрированы IQR-флаги из price_analyzer.
+    При наличии достаточной статистики (n >= 2) старые
+    price_deviation_* заменяются на iqr_strong_outlier / iqr_moderate_outlier.
 """
 
 import statistics
-from typing import Any, Dict
-from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 
-FACTOR_PROBS = {
-    "duplicate_3_plus":         0.65,
-    "duplicate_2":              0.35,
-    "vague_item":               0.70,
-    "price_deviation_50":       0.60,
-    "price_deviation_20":       0.40,
-    "contractor_concentration": 0.50,
-    "split_suspected":          0.45,
-    "single_occurrence":        0.10,
-    "contractor_blacklist":     0.80,
-    "temporal_clustering":      0.35,
-    "graph_central":            0.30,
-    "quantity_deviation_50":    0.55,
-    "quantity_deviation_20":    0.30,
-    "total_mismatch":           0.60,
-    "volume_without_price":     0.45,
-    "price_without_volume":     0.35,
-    "unit_mismatch":            0.50,
-    "zero_quantity":            0.65,
-    "round_number":             0.25,
-    "total_price_deviation_40": 0.55,
-    "total_price_deviation_15": 0.30,
+# ─── Веса флагов (аддитивные, не вероятности) ────────────────────
+FLAG_WEIGHTS = {
+    # Структурные аномалии
+    "duplicate_3_plus":          25,
+    "duplicate_2":               10,
+    "single_occurrence":          5,
+    "split_suspected":           15,
+
+    # Ценовые отклонения — IQR-based (v2, приоритет над price_deviation_*)
+    "iqr_strong_outlier":        35,   # за extreme fence (3×IQR)
+    "iqr_moderate_outlier":      18,   # за Tukey fence (1.5×IQR)
+
+    # Ценовые отклонения — legacy (используются только если IQR недоступен)
+    "price_deviation_100":       30,
+    "price_deviation_50":        20,
+    "price_deviation_20":        10,
+    "total_price_deviation_40":  20,
+    "total_price_deviation_15":   8,
+
+    # Целостность данных
+    "total_mismatch":            20,
+    "volume_without_price":      15,
+    "price_without_volume":      10,
+    "zero_quantity":             15,
+    "unit_mismatch":             10,
+
+    # Контрагент
+    "contractor_concentration":   8,
+    "contractor_blacklist":       35,
+
+    # Прочие
+    "vague_item":                10,
+    "round_number":               5,
+    "quantity_deviation_50":     15,
+    "quantity_deviation_20":      8,
+    "temporal_clustering":       10,
+    "graph_central":              8,
 }
 
 VAGUE_KEYWORDS = {
@@ -39,7 +58,7 @@ VAGUE_KEYWORDS = {
     "прочее", "иные", "разные", "разное",
 }
 
-CONTRACTOR_BLACKLIST: set[str] = set()
+CONTRACTOR_BLACKLIST: set = set()
 
 
 # ─── Утилиты ──────────────────────────────────────────────────────
@@ -59,42 +78,54 @@ def _get(item: dict, *keys, default="") -> str:
     return default
 
 
-def _get_name(item: dict)        -> str:   return _get(item, "name", "item_name", "canonical_name")
-def _get_department(item: dict)  -> str:   return _get(item, "department")
-def _get_contractor(item: dict)  -> str:   return _get(item, "contractor")
-def _get_source_file(item: dict) -> str:   return _get(item, "source_file", "source")
-def _get_date(item: dict)        -> str:   return _get(item, "date")
-def _get_unit(item: dict)        -> str:   return _get(item, "unit").lower().strip()
-def _get_unit_price(item: dict)  -> float: return _to_float(item.get("unit_price") or item.get("price") or 0)
-def _get_total_price(item: dict) -> float: return _to_float(item.get("total_price") or 0)
+def _get_name(item)        -> str:   return _get(item, "name", "item_name", "canonical_name")
+def _get_department(item)  -> str:   return _get(item, "department")
+def _get_contractor(item)  -> str:   return _get(item, "contractor")
+def _get_source_file(item) -> str:   return _get(item, "source_file", "source")
+def _get_date(item)        -> str:   return _get(item, "date")
+def _get_unit(item)        -> str:   return _get(item, "unit").lower().strip()
+def _get_unit_price(item)  -> float: return _to_float(item.get("unit_price") or item.get("price") or 0)
+def _get_total_price(item) -> float: return _to_float(item.get("total_price") or 0)
 
 
 def _is_vague(name: str) -> bool:
-    """
-    Позиция размытая если состоит ТОЛЬКО из общих слов.
-    'Геодезические работы' — не размытая ('работы' уточнено).
-    'Прочие работы' — размытая.
-    """
     n     = name.lower().strip()
     words = set(n.split())
-    # Если все слова — ключевые (нет уточняющих), то размыто
-    non_vague_words = words - VAGUE_KEYWORDS
-    if not non_vague_words:
+    non_vague = words - VAGUE_KEYWORDS
+    if not non_vague:
         return True
-    # Если есть хоть одно ключевое слово И нет уточняющего существительного длиннее 5 символов
-    has_vague = any(kw in n for kw in VAGUE_KEYWORDS)
+    has_vague    = any(kw in n for kw in VAGUE_KEYWORDS)
     has_specific = any(len(w) > 5 and w not in VAGUE_KEYWORDS for w in words)
     return has_vague and not has_specific
 
 
-def _group_unit_prices(group: dict) -> list[float]:
-    """
-    Собирает unit_price по группе.
-    Для позиций без unit_price вычисляет implied: total_price / quantity.
-    Если у позиции нет qty — берёт медианное qty из группы.
-    """
+def _unique_list(group: dict, getter) -> list:
+    seen, result = set(), []
+    for i in group.get("items", []):
+        v = getter(i)
+        if v and v not in seen:
+            seen.add(v)
+            result.append(v)
+    return result
+
+
+def _unique_departments(group) -> list: return _unique_list(group, _get_department)
+def _unique_contractors(group) -> list: return _unique_list(group, _get_contractor)
+
+
+def _is_round_number(value: float) -> bool:
+    if value <= 0:
+        return False
+    for divisor in (1_000_000, 500_000, 100_000):
+        if value >= divisor and value % divisor == 0:
+            return True
+    return False
+
+
+# ─── Статистика группы ────────────────────────────────────────────
+
+def _group_price_stats(group: dict) -> Optional[dict]:
     items = group.get("items", [])
-    # Медианное количество по группе (для позиций без qty)
     known_qtys = [_to_float(i.get("quantity", 0)) for i in items if _to_float(i.get("quantity", 0)) > 0]
     median_qty = statistics.median(known_qtys) if known_qtys else 0
 
@@ -108,12 +139,33 @@ def _group_unit_prices(group: dict) -> list[float]:
             qty = _to_float(i.get("quantity", 0)) or median_qty
             if tp > 0 and qty > 0:
                 prices.append(round(tp / qty, 2))
-    return prices
+
+    if not prices:
+        return None
+
+    return {
+        "values":  prices,
+        "n":       len(prices),
+        "mean":    round(statistics.mean(prices), 2),
+        "median":  round(statistics.median(prices), 2),
+        "min":     round(min(prices), 2),
+        "max":     round(max(prices), 2),
+        "stdev":   round(statistics.stdev(prices), 2) if len(prices) > 1 else 0.0,
+    }
 
 
-def _reference_price(item: dict, group: dict) -> float:
-    prices = _group_unit_prices(group)
-    return round(statistics.mean(prices), 2) if prices else 0.0
+def _effective_price(item: dict, group: dict) -> float:
+    up = _get_unit_price(item)
+    if up > 0:
+        return up
+    tp  = _get_total_price(item)
+    qty = _to_float(item.get("quantity", 0))
+    if qty == 0:
+        known_qtys = [_to_float(i.get("quantity", 0)) for i in group.get("items", []) if _to_float(i.get("quantity", 0)) > 0]
+        qty = statistics.median(known_qtys) if known_qtys else 0
+    if tp > 0 and qty > 0:
+        return round(tp / qty, 2)
+    return 0.0
 
 
 def _deviation_pct(value: float, ref: float) -> float:
@@ -122,32 +174,36 @@ def _deviation_pct(value: float, ref: float) -> float:
     return round(abs((value - ref) / ref * 100), 2)
 
 
-def _unique_list(group: dict, getter) -> list[str]:
-    seen, result = set(), []
-    for i in group.get("items", []):
-        v = getter(i)
-        if v and v not in seen:
-            seen.add(v)
-            result.append(v)
-    return result
-
-
-def _unique_departments(group: dict) -> list[str]: return _unique_list(group, _get_department)
-def _unique_contractors(group: dict) -> list[str]: return _unique_list(group, _get_contractor)
-
-
-def _is_round_number(value: float) -> bool:
-    if value <= 0:
-        return False
-    for divisor in (10000, 5000, 1000):
-        if value >= divisor and value % divisor == 0:
-            return True
-    return False
-
-
 # ─── Проверки ─────────────────────────────────────────────────────
 
-def _check_quantity_deviation(item: dict, group: dict) -> list[str]:
+def _check_price_deviation_legacy(item: dict, group: dict) -> list:
+    """Fallback: используется только если IQR-данных недостаточно."""
+    stats = _group_price_stats(group)
+    if not stats or stats["n"] < 2:
+        return []
+    price = _effective_price(item, group)
+    if price <= 0:
+        return []
+    dev = _deviation_pct(price, stats["median"])
+    if dev > 100: return ["price_deviation_100"]
+    if dev > 50:  return ["price_deviation_50"]
+    if dev > 20:  return ["price_deviation_20"]
+    return []
+
+
+def _check_iqr_price_deviation(item: dict, group: dict) -> list:
+    """
+    IQR-based ценовые флаги через price_analyzer.
+    Возвращает [] если данных недостаточно — тогда используется legacy.
+    """
+    try:
+        from backend.pipeline.price_analyzer import get_price_flags
+        return get_price_flags(item, group.get("items", []))
+    except ImportError:
+        return []
+
+
+def _check_quantity_deviation(item: dict, group: dict) -> list:
     quantities = [
         _to_float(i.get("quantity", 0))
         for i in group.get("items", [])
@@ -155,25 +211,17 @@ def _check_quantity_deviation(item: dict, group: dict) -> list[str]:
     ]
     if len(quantities) < 2:
         return []
-
     min_q = min(quantities)
     max_q = max(quantities)
     if min_q == 0:
         return []
-
-    spread    = (max_q - min_q) / min_q * 100
-    item_qty  = _to_float(item.get("quantity", 0))
-    if item_qty <= 0:
-        return []
-
-    if spread > 30:
-        return ["quantity_deviation_50"]
-    if spread > 10:
-        return ["quantity_deviation_20"]
+    spread = (max_q - min_q) / min_q * 100
+    if spread > 30: return ["quantity_deviation_50"]
+    if spread > 10: return ["quantity_deviation_20"]
     return []
 
 
-def _check_total_mismatch(item: dict) -> list[str]:
+def _check_total_mismatch(item: dict) -> list:
     if item.get("_has_detail") is False:
         return []
     unit_price  = _get_unit_price(item)
@@ -186,7 +234,7 @@ def _check_total_mismatch(item: dict) -> list[str]:
     return []
 
 
-def _check_volume_price_integrity(item: dict) -> list[str]:
+def _check_volume_price_integrity(item: dict) -> list:
     if item.get("_has_detail") is False:
         return []
     unit_price = _get_unit_price(item)
@@ -201,19 +249,12 @@ def _check_volume_price_integrity(item: dict) -> list[str]:
     return []
 
 
-def _check_unit_mismatch(item: dict, group: dict) -> list[str]:
+def _check_unit_mismatch(item: dict, group: dict) -> list:
     units = [_get_unit(i) for i in group.get("items", []) if _get_unit(i)]
     return ["unit_mismatch"] if len(set(units)) > 1 else []
 
 
-def _check_round_number(item: dict) -> list[str]:
-    for val in (_get_total_price(item), _get_unit_price(item)):
-        if _is_round_number(val):
-            return ["round_number"]
-    return []
-
-
-def _check_total_price_deviation(item: dict, group: dict) -> list[str]:
+def _check_total_price_deviation(item: dict, group: dict) -> list:
     totals = [
         _to_float(i.get("total_price") or 0)
         for i in group.get("items", [])
@@ -221,27 +262,26 @@ def _check_total_price_deviation(item: dict, group: dict) -> list[str]:
     ]
     if len(totals) < 2:
         return []
-    mean_t     = statistics.mean(totals)
+    median_t   = statistics.median(totals)
     item_total = _get_total_price(item)
-    if mean_t == 0 or item_total <= 0:
+    if median_t == 0 or item_total <= 0:
         return []
-    dev = abs(item_total - mean_t) / mean_t * 100
-    if dev > 40:
-        return ["total_price_deviation_40"]
-    if dev > 15:
-        return ["total_price_deviation_15"]
+    dev = _deviation_pct(item_total, median_t)
+    if dev > 40: return ["total_price_deviation_40"]
+    if dev > 15: return ["total_price_deviation_15"]
     return []
 
 
 # ─── Флаги ────────────────────────────────────────────────────────
 
-def calculate_flags(item: dict, group: dict, graph_context: Dict = None) -> list[str]:
+def calculate_flags(item: dict, group: dict, graph_context: dict = None) -> list:
     flags       = []
     departments = _unique_departments(group)
     contractors = _unique_contractors(group)
     n_depts     = len(departments)
     n_items     = len(group.get("items", []))
 
+    # Дубли
     if n_depts >= 3:
         flags.append("duplicate_3_plus")
     elif n_depts == 2:
@@ -249,41 +289,36 @@ def calculate_flags(item: dict, group: dict, graph_context: Dict = None) -> list
     elif n_items == 1:
         flags.append("single_occurrence")
 
+    # Размытая позиция
     if _is_vague(_get_name(item)):
         flags.append("vague_item")
 
-    unit_price = _get_unit_price(item)
-    # Если нет unit_price — вычисляем implied из total/qty или total/median_qty группы
-    if unit_price == 0:
-        tp  = _get_total_price(item)
-        qty = _to_float(item.get("quantity", 0))
-        if qty == 0:
-            known_qtys = [_to_float(i.get("quantity",0)) for i in group.get("items",[]) if _to_float(i.get("quantity",0)) > 0]
-            qty = statistics.median(known_qtys) if known_qtys else 0
-        if tp > 0 and qty > 0:
-            unit_price = round(tp / qty, 2)
-    ref_price  = _reference_price(item, group)
-    if unit_price > 0 and ref_price > 0:
-        dev = _deviation_pct(unit_price, ref_price)
-        if dev > 50:
-            flags.append("price_deviation_50")
-        elif dev > 20:
-            flags.append("price_deviation_20")
+    # Ценовые отклонения: IQR если доступно, иначе legacy
+    iqr_flags = _check_iqr_price_deviation(item, group)
+    if iqr_flags:
+        flags.extend(iqr_flags)
+    else:
+        flags.extend(_check_price_deviation_legacy(item, group))
 
+    # Дробление
     source      = _get_source_file(item)
     same_source = [i for i in group.get("items", []) if _get_source_file(i) == source]
     if len(same_source) >= 3:
         flags.append("split_suspected")
 
+    # Один поставщик
     if len(contractors) == 1 and n_items > 1:
         flags.append("contractor_concentration")
 
+    # Чёрный список
     if _get_contractor(item) in CONTRACTOR_BLACKLIST:
         flags.append("contractor_blacklist")
 
+    # Временной кластер
     dates = [_get_date(i) for i in group.get("items", []) if _get_date(i)]
     if len(dates) > 2:
         try:
+            from datetime import datetime
             dt_list = sorted([datetime.strptime(d, "%Y-%m-%d") for d in dates])
             diffs   = [(dt_list[i + 1] - dt_list[i]).days for i in range(len(dt_list) - 1)]
             if any(d <= 3 for d in diffs):
@@ -291,19 +326,33 @@ def calculate_flags(item: dict, group: dict, graph_context: Dict = None) -> list
         except Exception:
             pass
 
+    # Граф
     item_key = f"item:{_get_name(item)}"
     if graph_context and item_key in graph_context:
         ctx = graph_context[item_key]
         if isinstance(ctx, dict) and ctx.get("centrality", 0) > 0.1:
             flags.append("graph_central")
 
+    # Количественные проверки
     flags.extend(_check_quantity_deviation(item, group))
     flags.extend(_check_total_mismatch(item))
     flags.extend(_check_volume_price_integrity(item))
     flags.extend(_check_unit_mismatch(item, group))
-    flags.extend(_check_round_number(item))
     flags.extend(_check_total_price_deviation(item, group))
 
+    # Круглая сумма
+    price_flags = {
+        "price_deviation_100", "price_deviation_50", "price_deviation_20",
+        "total_price_deviation_40", "total_price_deviation_15",
+        "iqr_strong_outlier", "iqr_moderate_outlier",
+    }
+    if not any(f in flags for f in price_flags):
+        total = _get_total_price(item)
+        up    = _get_unit_price(item)
+        if _is_round_number(total) or _is_round_number(up):
+            flags.append("round_number")
+
+    # Дедупликация с сохранением порядка
     seen, unique = set(), []
     for f in flags:
         if f not in seen:
@@ -312,13 +361,11 @@ def calculate_flags(item: dict, group: dict, graph_context: Dict = None) -> list
     return unique
 
 
-# ─── Вероятностная модель ─────────────────────────────────────────
+# ─── Скоринг ──────────────────────────────────────────────────────
 
-def probabilistic_score(flags: list[str]) -> int:
-    complement = 1.0
-    for flag in flags:
-        complement *= (1.0 - FACTOR_PROBS.get(flag, 0.0))
-    return min(round((1.0 - complement) * 100), 100)
+def rule_based_score(flags: list) -> int:
+    total = sum(FLAG_WEIGHTS.get(f, 0) for f in flags)
+    return min(total, 100)
 
 
 def get_risk_level(score: int) -> str:
@@ -328,123 +375,18 @@ def get_risk_level(score: int) -> str:
     return "LOW"
 
 
-# ─── Объяснения ───────────────────────────────────────────────────
-
-def build_explanation(flags: list[str], item: dict, group: dict) -> str:
-    parts       = []
-    departments = _unique_departments(group)
-    contractors = _unique_contractors(group)
-    unit_price  = _get_unit_price(item)
-    total_price = _get_total_price(item)
-    ref_price   = _reference_price(item, group)
-    n_items     = len(group.get("items", []))
-    dates       = [_get_date(i) for i in group.get("items", []) if _get_date(i)]
-
-    if "duplicate_3_plus" in flags:
-        parts.append(f"Закупается в {len(departments)} отделах: {', '.join(departments[:5])}")
-    elif "duplicate_2" in flags:
-        parts.append(f"Закупается в 2 отделах: {', '.join(departments)}")
-
-    if "vague_item" in flags:
-        parts.append("Размытая формулировка позиции")
-
-    # ── Цена единицы ──
-    # Вычисляем фактическую цену (unit или implied)
-    qty_for_price = _to_float(item.get("quantity", 0))
-    if qty_for_price == 0:
-        known_qtys = [_to_float(i.get("quantity",0)) for i in group.get("items",[]) if _to_float(i.get("quantity",0)) > 0]
-        qty_for_price = statistics.median(known_qtys) if known_qtys else 0
-    implied_price = round(total_price / qty_for_price, 2) if (unit_price == 0 and total_price > 0 and qty_for_price > 0) else 0
-    display_price = unit_price if unit_price > 0 else implied_price
-
-    if "price_deviation_50" in flags and ref_price > 0:
-        dev = _deviation_pct(display_price, ref_price)
-        label = "Расчётная цена" if unit_price == 0 else "Цена"
-        parts.append(f"{label} {display_price:,.0f} отклоняется от средней {ref_price:,.0f} на {dev:.0f}%")
-    elif "price_deviation_20" in flags and ref_price > 0:
-        dev = _deviation_pct(display_price, ref_price)
-        label = "Расчётная цена" if unit_price == 0 else "Цена"
-        parts.append(f"{label} {display_price:,.0f} отклоняется от средней {ref_price:,.0f} на {dev:.0f}%")
-    elif display_price == 0 and total_price > 0:
-        parts.append(f"Паушальная сумма: {total_price:,.0f} руб. (единичная цена не указана)")
-    elif display_price > 0:
-        parts.append(f"Цена за единицу: {display_price:,.0f} руб.")
-
-    # ── Объём ──
-    if "quantity_deviation_50" in flags or "quantity_deviation_20" in flags:
-        qtys = [_to_float(i.get("quantity", 0)) for i in group.get("items", [])
-                if _to_float(i.get("quantity", 0)) > 0]
-        if qtys:
-            spread = (max(qtys) - min(qtys)) / min(qtys) * 100
-            label  = ">30%" if "quantity_deviation_50" in flags else ">10%"
-            parts.append(f"Объём расходится {label} между документами (мин {min(qtys):g} / макс {max(qtys):g})")
-
-    # ── Целостность ──
-    if "total_mismatch" in flags:
-        qty      = _to_float(item.get("quantity", 0))
-        expected = unit_price * qty
-        parts.append(f"Сумма {total_price:,.0f} не совпадает с ценой×кол-во ({expected:,.0f})")
-
-    if "volume_without_price" in flags:
-        qty = _to_float(item.get("quantity", 0))
-        parts.append(f"Указан объём {qty:g}, но цена отсутствует")
-
-    if "price_without_volume" in flags:
-        parts.append(f"Указана цена {unit_price:,.0f}, но объём не задан")
-
-    if "zero_quantity" in flags:
-        parts.append(f"Количество = 0, но цена {unit_price:,.0f} указана")
-
-    if "unit_mismatch" in flags:
-        units = list({_get_unit(i) for i in group.get("items", []) if _get_unit(i)})
-        parts.append(f"Разные единицы в документах: {', '.join(units)}")
-
-    if "round_number" in flags:
-        parts.append("Подозрительно круглая сумма — возможные приписки")
-
-    # ── Расхождение итоговых сумм ──
-    if "total_price_deviation_40" in flags or "total_price_deviation_15" in flags:
-        totals = [_to_float(i.get("total_price") or 0) for i in group.get("items", [])
-                  if _to_float(i.get("total_price") or 0) > 0]
-        if totals:
-            label = ">40%" if "total_price_deviation_40" in flags else ">15%"
-            parts.append(
-                f"Итоговая сумма расходится {label} между документами "
-                f"(мин {min(totals):,.0f} / макс {max(totals):,.0f})"
-            )
-
-    if "split_suspected" in flags:
-        parts.append(f"Возможное дробление — {n_items} записей")
-
-    if "contractor_concentration" in flags and contractors:
-        parts.append(f"Единственный поставщик: {contractors[0]}")
-
-    if "contractor_blacklist" in flags:
-        parts.append(f"Подозрительный контрагент: {_get_contractor(item)}")
-
-    if "temporal_clustering" in flags and dates:
-        parts.append(f"Частые закупки в короткий срок ({len(dates)} дат)")
-
-    if "graph_central" in flags:
-        parts.append("Высокая центральность в сети закупок")
-
-    if "single_occurrence" in flags:
-        parts.append("Единственное упоминание")
-
-    return " | ".join(parts) if parts else "Без явных аномалий"
-
-
 # ─── Основная функция ─────────────────────────────────────────────
 
-def score_item(item: dict, group: dict, graph_context: Dict = None) -> dict:
+def score_item(item: dict, group: dict, graph_context: dict = None) -> dict:
     flags       = calculate_flags(item, group, graph_context)
-    score       = probabilistic_score(flags)
+    score       = rule_based_score(flags)
     risk_level  = get_risk_level(score)
-    explanation = build_explanation(flags, item, group)
+    stats       = _group_price_stats(group)
     unit_price  = _get_unit_price(item)
+    eff_price   = _effective_price(item, group)
     total_price = _get_total_price(item)
-    ref_price   = _reference_price(item, group)
-    dev         = _deviation_pct(unit_price, ref_price) if ref_price > 0 and unit_price > 0 else 0.0
+    ref_price   = stats["median"] if stats else 0.0
+    dev         = _deviation_pct(eff_price, ref_price) if ref_price > 0 and eff_price > 0 else 0.0
 
     return {
         "name":            _get_name(item),
@@ -454,15 +396,16 @@ def score_item(item: dict, group: dict, graph_context: Dict = None) -> dict:
         "source_file":     _get_source_file(item),
         "date":            _get_date(item),
         "unit_price":      unit_price,
+        "effective_price": eff_price,
         "total_price":     total_price,
         "quantity":        _to_float(item.get("quantity", 0)),
         "unit":            _get_unit(item),
+        "price_stats":     stats,
         "reference_price": ref_price,
         "deviation_pct":   dev,
         "score":           score,
         "risk_level":      risk_level,
         "flags":           flags,
-        "explanation":     explanation,
         "departments":     _unique_departments(group),
         "contractors":     _unique_contractors(group),
     }

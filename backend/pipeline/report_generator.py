@@ -1,15 +1,16 @@
 # backend/pipeline/report_generator.py
 """
 Генератор DOCX-отчёта.
-Использует Anthropic Claude для написания аналитического нарратива по каждой позиции.
-Fallback — детерминированный текст если API недоступен.
+Принципы:
+  - нейтральные формулировки (факты, отклонения, возможные причины)
+  - никаких обвинительных выводов без достаточной базы
+  - каждый сигнал подкреплён статистикой (медиана, N наблюдений)
+  - fallback без AI если API недоступен
 """
 
 import io
 import os
-import json
 import logging
-import requests
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, RGBColor, Cm
@@ -22,216 +23,178 @@ logger = logging.getLogger(__name__)
 
 # ─── Цвета ────────────────────────────────────────────────────────
 
-COLOR_CRITICAL  = RGBColor(0x7C, 0x3A, 0xED)
-COLOR_HIGH      = RGBColor(0xCC, 0x33, 0x33)
-COLOR_MEDIUM    = RGBColor(0xD4, 0x88, 0x2A)
-COLOR_LOW       = RGBColor(0x2E, 0xA8, 0x4A)
-COLOR_ACCENT    = RGBColor(0x1F, 0x49, 0x7D)
-COLOR_DARK      = RGBColor(0x20, 0x20, 0x30)
+COLOR_CRITICAL = RGBColor(0x7C, 0x3A, 0xED)
+COLOR_HIGH     = RGBColor(0xCC, 0x33, 0x33)
+COLOR_MEDIUM   = RGBColor(0xD4, 0x88, 0x2A)
+COLOR_LOW      = RGBColor(0x2E, 0xA8, 0x4A)
+COLOR_ACCENT   = RGBColor(0x1F, 0x49, 0x7D)
 
 RISK_COLORS = {"CRITICAL": COLOR_CRITICAL, "HIGH": COLOR_HIGH, "MEDIUM": COLOR_MEDIUM, "LOW": COLOR_LOW}
-RISK_LABELS = {"CRITICAL": "КРИТИЧЕСКИЙ", "HIGH": "ВЫСОКИЙ", "MEDIUM": "СРЕДНИЙ", "LOW": "НИЗКИЙ"}
-RISK_BG     = {"CRITICAL": "EDE7F6", "HIGH": "FFEBEE", "MEDIUM": "FFF8E1", "LOW": "F1F8E9"}
+RISK_LABELS = {"CRITICAL": "КРИТИЧЕСКИЙ", "HIGH": "ВЫСОКИЙ", "MEDIUM": "СРЕДНИЙ",    "LOW": "НИЗКИЙ"}
+RISK_BG     = {"CRITICAL": "EDE7F6",      "HIGH": "FFEBEE",   "MEDIUM": "FFF8E1",    "LOW": "F1F8E9"}
+
+SCORE_EXPLANATION = (
+    "Скор рассчитывается аддитивно: каждый активный индикатор добавляет "
+    "фиксированное количество баллов (сумма ограничена 100). "
+    "Скор отражает количество и значимость сигналов — не вероятность нарушения."
+)
 
 
-# ─── AI нарратив ──────────────────────────────────────────────────
+# ─── Нарратив (детерминированный, без AI) ─────────────────────────
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
+def _build_narrative(results: list, source_files: list) -> str:
+    critical = [r for r in results if r.get("risk_level") == "CRITICAL"]
+    high     = [r for r in results if r.get("risk_level") == "HIGH"]
+    medium   = [r for r in results if r.get("risk_level") == "MEDIUM"]
+    low      = [r for r in results if r.get("risk_level") == "LOW"]
+    total    = len(results)
+    total_sum = sum(r.get("total_price") or 0 for r in results)
 
-def _build_narrative_prompt(results: list[dict], source_files: list[str]) -> str:
-    high_risk = [r for r in results if r.get("score", 0) >= 40]
-    items_text = []
-    for r in high_risk[:12]:
-        flags = ", ".join(r.get("flags", []))
-        items_text.append(
-            f'- "{r.get("name","?")}": скор {r.get("score")}/100 ({r.get("risk_level")}), '
-            f'флаги: [{flags}], объяснение: {r.get("explanation","")}'
+    lines = []
+
+    # ── Резюме ──
+    lines.append("## ИСПОЛНИТЕЛЬНОЕ РЕЗЮМЕ")
+    attention = len(critical) + len(high)
+    lines.append(
+        f"Проанализировано {total} позиций из {len(source_files or [])} документов. "
+        f"Общий объём закупок: {total_sum:,.0f} руб. "
+        f"Выявлено позиций, требующих внимания: {attention} "
+        f"(критический уровень: {len(critical)}, высокий: {len(high)}, средний: {len(medium)})."
+    )
+
+    if attention == 0:
+        lines.append(
+            "По результатам автоматического анализа позиций с высоким или критическим "
+            "уровнем индикаторов не выявлено. Рекомендуется плановый мониторинг."
+        )
+    else:
+        lines.append(
+            f"Позиции с ненулевым скором содержат один или несколько индикаторов отклонения: "
+            f"расхождение цен между документами, несоответствие объёмов, неполнота данных "
+            f"или структурные особенности закупки. "
+            f"Каждый сигнал описан в разделе «Детальный разбор». "
+            f"Выводы носят индикативный характер и требуют верификации по первичным документам."
         )
 
-    return f"""Ты — старший аналитик финансовой безопасности строительной компании.
-Тебе предоставлены результаты автоматического анализа закупочных документов на предмет аномалий и потенциального мошенничества.
+    # ── Детали ──
+    lines.append("\n## ДЕТАЛЬНЫЙ АНАЛИЗ ИНДИКАТОРОВ")
 
-Документы: {', '.join(source_files or ['не указаны'])}
-Всего позиций: {len(results)}
-Позиций с высоким риском (скор ≥40): {len(high_risk)}
+    for r in sorted(critical + high, key=lambda x: x.get("score", 0), reverse=True)[:10]:
+        name  = r.get("item") or r.get("name") or "—"
+        score = r.get("score", 0)
+        rl    = r.get("risk_level", "")
+        full  = r.get("full_explanation", {})
 
-Детали подозрительных позиций:
-{chr(10).join(items_text) if items_text else '— аномалий не обнаружено'}
+        lines.append(f"\n### {name}  (скор: {score}/100, уровень: {RISK_LABELS.get(rl, rl)})")
 
-Напиши профессиональное аналитическое заключение для службы внутреннего контроля.
-Структура ответа (строго в таком порядке, используй эти заголовки):
+        flags_explained = full.get("flags_explained", [])
+        if flags_explained:
+            for fe in flags_explained:
+                facts  = fe.get("facts", "")
+                dev    = fe.get("deviation", "")
+                interp = fe.get("interpretation", "")
+                if facts:
+                    lines.append(f"ФАКТЫ: {facts}")
+                if dev and dev != "—":
+                    lines.append(f"ОТКЛОНЕНИЕ: {dev}")
+                if interp:
+                    lines.append(f"ИНТЕРПРЕТАЦИЯ: {interp}")
+                lines.append("")
+        else:
+            expl = r.get("explanation", "")
+            if expl:
+                lines.append(expl)
 
-## ИСПОЛНИТЕЛЬНОЕ РЕЗЮМЕ
-2-3 абзаца: общая оценка ситуации, ключевые риски, срочность реагирования.
+    # ── Методология скоринга ──
+    lines.append("\n## МЕТОДОЛОГИЯ СКОРИНГА")
+    lines.append(SCORE_EXPLANATION)
+    lines.append("\nУровни риска:")
+    lines.append("— CRITICAL (70–100): 3+ значимых индикатора одновременно")
+    lines.append("— HIGH (40–69): несколько индикаторов или один весомый")
+    lines.append("— MEDIUM (20–39): один-два слабых сигнала")
+    lines.append("— LOW (0–19): единичный незначительный сигнал или его отсутствие")
 
-## ДЕТАЛЬНЫЙ АНАЛИЗ АНОМАЛИЙ
-По каждой позиции с риском HIGH и CRITICAL — отдельный подраздел.
-Для каждой позиции объясни: что именно подозрительно, какова вероятная схема злоупотребления, какие конкретные цифры вызывают вопросы.
+    # ── Рекомендации ──
+    lines.append("\n## РЕКОМЕНДУЕМЫЕ ДЕЙСТВИЯ")
+    if critical:
+        lines.append("**По позициям с уровнем CRITICAL:**")
+        lines.append("— Запросить первичные документы: договоры, счета-фактуры, акты выполненных работ.")
+        lines.append("— Сверить данные с бухгалтерским учётом и банковскими выписками.")
+        lines.append("— Получить письменное обоснование от ответственного сотрудника.")
+        lines.append("")
+    if high:
+        lines.append("**По позициям с уровнем HIGH:**")
+        lines.append("— Включить в ближайшую плановую проверку.")
+        lines.append("— Запросить актуальный прайс-лист поставщика для сверки цен.")
+        lines.append("")
+    lines.append("**Общее:**")
+    lines.append("— Результаты автоматического анализа не являются основанием для выводов о нарушениях.")
+    lines.append("— Окончательное заключение формируется по итогам документальной проверки.")
 
-## ОЦЕНКА ФИНАНСОВОГО УЩЕРБА
-Оцени потенциальный масштаб потерь на основе сумм из данных. Укажи конкретные суммы.
+    # ── Выводы ──
+    lines.append("\n## ВЫВОДЫ")
+    lines.append(
+        f"Автоматический анализ выявил {attention} позиций с индикаторами отклонения "
+        f"из {total} проанализированных. "
+        f"Система фиксирует статистические отклонения и структурные несоответствия — "
+        f"интерпретация причин остаётся за ответственным специалистом."
+    )
 
-## РЕКОМЕНДУЕМЫЕ ДЕЙСТВИЯ
-Конкретный план действий с приоритетами: что делать в первые 24 часа, в первую неделю, в первый месяц.
-
-## ВЫВОДЫ
-1 абзац итогового заключения.
-
-Пиши деловым языком, конкретно, без воды. Используй реальные цифры из данных."""
-
-
-def _call_ollama_narrative(prompt: str) -> str | None:
-    try:
-        r = requests.post(
-            OLLAMA_URL,
-            json={"model": "mistral", "prompt": prompt, "stream": False, "temperature": 0.3},
-            timeout=15,  # жёсткий таймаут 15 секунд
-        )
-        r.raise_for_status()
-        return r.json().get("response", "").strip()
-    except Exception as e:
-        logger.warning(f"Ollama narrative failed: {e}")
-        return None
+    return "\n".join(lines)
 
 
-def _call_anthropic_narrative(prompt: str) -> str | None:
-    """Вызов через Anthropic API если есть ключ в переменных окружения."""
+def _try_ai_narrative(results: list, source_files: list) -> str | None:
+    """Пробует Anthropic API, возвращает None если недоступен."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         return None
     try:
         import anthropic
+        high_risk = [r for r in results if r.get("score", 0) >= 40]
+        items_summary = []
+        for r in high_risk[:10]:
+            full  = r.get("full_explanation", {})
+            flags = "; ".join(
+                f"{fe['deviation']}" for fe in full.get("flags_explained", [])
+                if fe.get("deviation") and fe["deviation"] != "—"
+            )
+            items_summary.append(
+                f'- «{r.get("name","?")}»: скор {r.get("score")}/100, индикаторы: {flags or r.get("explanation","")}'
+            )
+
+        prompt = f"""Ты — аналитик внутреннего контроля. Составь нейтральное аналитическое резюме.
+
+Документов: {len(source_files or [])}
+Позиций: {len(results)}
+Позиций с индикаторами (скор ≥40): {len(high_risk)}
+
+Ключевые позиции:
+{chr(10).join(items_summary) if items_summary else '— отклонений не выявлено'}
+
+Требования к тексту:
+1. Только нейтральные формулировки: «выявлено отклонение», «требует проверки», «возможные причины»
+2. Никаких обвинительных выводов
+3. Каждый вывод подкреплён конкретными числами из данных
+4. Структура: РЕЗЮМЕ → ДЕТАЛИ → РЕКОМЕНДАЦИИ → ВЫВОДЫ
+5. Деловой язык, без воды"""
+
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
+        msg    = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}]
+            max_tokens=3000,
+            messages=[{"role": "user", "content": prompt}],
         )
         return msg.content[0].text.strip()
     except Exception as e:
-        logger.warning(f"Anthropic narrative failed: {e}")
+        logger.warning(f"AI narrative failed: {e}")
         return None
 
 
-def _generate_narrative(results: list[dict], source_files: list[str]) -> str:
-    prompt = _build_narrative_prompt(results, source_files)
-
-    # Anthropic API если есть ключ
-    text = _call_anthropic_narrative(prompt)
-    if text:
-        return text
-
-    # Ollama — только если запущена (быстрая проверка)
-    try:
-        ping = requests.get("http://localhost:11434", timeout=2)
-        if ping.ok:
-            text = _call_ollama_narrative(prompt)
-            if text:
-                return text
-    except Exception:
-        pass
-
-    # Детерминированный fallback — всегда работает
-    return _deterministic_narrative(results, source_files)
-
-
-def _deterministic_narrative(results: list[dict], source_files: list[str]) -> str:
-    critical = [r for r in results if r.get("risk_level") == "CRITICAL"]
-    high     = [r for r in results if r.get("risk_level") == "HIGH"]
-    medium   = [r for r in results if r.get("risk_level") == "MEDIUM"]
-    total_sum = sum(r.get("total_price") or 0 for r in results if r.get("total_price"))
-
-    lines = []
-
-    lines.append("## ИСПОЛНИТЕЛЬНОЕ РЕЗЮМЕ")
-    if critical or high:
-        lines.append(
-            f"В ходе анализа {len(source_files or [])} документов выявлены серьёзные признаки нарушений "
-            f"в закупочной деятельности. Обнаружено {len(critical)} позиций критического уровня риска "
-            f"и {len(high)} позиций высокого уровня риска, требующих немедленного внимания службы "
-            f"внутреннего контроля. Общий объём закупок по проанализированным документам составляет "
-            f"{total_sum:,.0f} руб."
-        )
-        lines.append(
-            "Выявленные аномалии указывают на возможные схемы завышения стоимости работ, "
-            "концентрацию закупок у аффилированных поставщиков и потенциальное дробление "
-            "договоров с целью обхода конкурентных процедур. Ситуация требует срочного реагирования."
-        )
-    else:
-        lines.append(
-            f"По результатам анализа {len(source_files or [])} документов значимых аномалий "
-            f"критического или высокого уровня не выявлено. Рекомендуется плановый мониторинг."
-        )
-
-    lines.append("\n## ДЕТАЛЬНЫЙ АНАЛИЗ АНОМАЛИЙ")
-    for r in (critical + high)[:8]:
-        name  = r.get("name") or r.get("item") or "Позиция"
-        score = r.get("score", 0)
-        flags = r.get("flags", [])
-        expl  = r.get("explanation", "")
-        tp    = r.get("total_price") or 0
-        up    = r.get("unit_price") or 0
-
-        lines.append(f"\n### {name} (скор: {score}/100)")
-        flag_texts = {
-            "vague_item":             "Размытая формулировка не позволяет однозначно идентифицировать предмет закупки и верифицировать её обоснованность.",
-            "price_deviation_50":     f"Цена единицы ({up:,.0f} руб.) отклоняется от среднерыночной более чем на 50%, что свидетельствует о возможном завышении стоимости.",
-            "price_deviation_20":     f"Зафиксировано отклонение цены от средней по группе на 20-50%.",
-            "total_mismatch":         "Итоговая сумма не соответствует произведению количества на цену единицы, что указывает на возможную фальсификацию данных.",
-            "contractor_concentration": f"Все закупки сосредоточены у единственного поставщика: {', '.join(r.get('contractors', [])[:1])}. Отсутствие конкурентного отбора повышает риск завышения цен.",
-            "duplicate_3_plus":       f"Идентичная позиция закупается одновременно в {len(r.get('departments', []))} подразделениях, что может свидетельствовать о задвоении расходов.",
-            "split_suspected":        "Признаки искусственного дробления закупки с целью обхода порогов обязательного тендера.",
-            "round_number":           f"Итоговая сумма {tp:,.0f} руб. имеет подозрительно круглое значение, характерное для ручной корректировки данных.",
-            "quantity_deviation_50":  "Объёмы работ расходятся более чем на 50% между документами одного периода.",
-        }
-        for flag in flags:
-            if flag in flag_texts:
-                lines.append(flag_texts[flag])
-        if expl and expl != "Без явных аномалий":
-            lines.append(f"Системные индикаторы: {expl}")
-
-    lines.append("\n## ОЦЕНКА ФИНАНСОВОГО УЩЕРБА")
-    risk_sum = sum((r.get("total_price") or 0) for r in critical + high)
-    if risk_sum > 0:
-        lines.append(
-            f"Суммарный объём закупок по позициям высокого и критического риска составляет "
-            f"{risk_sum:,.0f} руб. Исходя из типовых схем завышения стоимости на 15-30%, "
-            f"потенциальный ущерб может составить от {risk_sum*0.15:,.0f} до {risk_sum*0.30:,.0f} руб. "
-            f"Оценка является предварительной и требует верификации по первичным документам."
-        )
-    else:
-        lines.append("Недостаточно данных для количественной оценки ущерба.")
-
-    lines.append("\n## РЕКОМЕНДУЕМЫЕ ДЕЙСТВИЯ")
-    lines.append("**В течение 24 часов:**")
-    lines.append("— Заморозить платежи по позициям с уровнем риска CRITICAL до завершения проверки.")
-    lines.append("— Уведомить руководство и службу экономической безопасности.")
-    lines.append("— Запросить первичные документы: договоры, счета-фактуры, акты КС-2/КС-3.")
-    lines.append("\n**В течение первой недели:**")
-    lines.append("— Провести сверку данных с бухгалтерским учётом и банковскими выписками.")
-    lines.append("— Запросить письменные объяснения у ответственных сотрудников.")
-    lines.append("— Проверить аффилированность поставщиков с сотрудниками компании.")
-    lines.append("\n**В течение первого месяца:**")
-    lines.append("— Провести полный аудит закупок за отчётный период.")
-    lines.append("— Пересмотреть регламент согласования закупок, ввести обязательный конкурентный отбор.")
-    lines.append("— Рассмотреть вопрос о привлечении независимого аудитора.")
-
-    lines.append("\n## ВЫВОДЫ")
-    if critical:
-        lines.append(
-            f"Проведённый анализ выявил признаки системных нарушений в закупочной деятельности. "
-            f"Наличие {len(critical)} позиций критического риска требует незамедлительного расследования. "
-            f"Автоматизированный анализ носит индикативный характер — окончательные выводы должны "
-            f"быть сделаны по результатам документальной проверки."
-        )
-    else:
-        lines.append(
-            "Выявленные аномалии носят умеренный характер и могут быть объяснены операционными "
-            "особенностями деятельности. Рекомендуется включить данные позиции в план "
-            "ближайшей внутренней проверки."
-        )
-
-    return "\n".join(lines)
+def _generate_narrative(results: list, source_files: list) -> str:
+    ai = _try_ai_narrative(results, source_files)
+    if ai:
+        return ai
+    return _build_narrative(results, source_files)
 
 
 # ─── DOCX утилиты ─────────────────────────────────────────────────
@@ -247,15 +210,23 @@ def _set_cell_bg(cell, hex_color: str):
 
 
 def _set_cell_border(cell, color="CCCCCC"):
-    tc     = cell._tc
-    tcPr   = tc.get_or_add_tcPr()
-    tcBdr  = OxmlElement("w:tcBorders")
+    tc    = cell._tc
+    tcPr  = tc.get_or_add_tcPr()
+    tcBdr = OxmlElement("w:tcBorders")
     for side in ("top", "left", "bottom", "right"):
         b = OxmlElement(f"w:{side}")
         b.set(qn("w:val"), "single"); b.set(qn("w:sz"), "4")
         b.set(qn("w:space"), "0");    b.set(qn("w:color"), color)
         tcBdr.append(b)
     tcPr.append(tcBdr)
+
+
+def _set_col_width(cell, dxa: int):
+    tc   = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    tcW  = OxmlElement("w:tcW")
+    tcW.set(qn("w:w"), str(dxa)); tcW.set(qn("w:type"), "dxa")
+    tcPr.append(tcW)
 
 
 def _para(doc, text, bold=False, size=11, color=None,
@@ -265,17 +236,17 @@ def _para(doc, text, bold=False, size=11, color=None,
     p.paragraph_format.space_before = Pt(space_before)
     p.paragraph_format.space_after  = Pt(space_after)
     run = p.add_run(text)
-    run.bold         = bold
-    run.italic       = italic
-    run.font.size    = Pt(size)
+    run.bold       = bold
+    run.italic     = italic
+    run.font.size  = Pt(size)
     if color:
         run.font.color.rgb = color
     return p
 
 
 def _heading(doc, text, level=1):
-    sizes = {1: 14, 2: 12, 3: 11}
-    p = _para(doc, text, bold=True, size=sizes.get(level, 11),
+    sizes = {1: 13, 2: 11, 3: 10}
+    p = _para(doc, text, bold=True, size=sizes.get(level, 10),
               color=COLOR_ACCENT, space_before=10, space_after=4)
     if level == 1:
         pPr  = p._p.get_or_add_pPr()
@@ -287,43 +258,39 @@ def _heading(doc, text, level=1):
     return p
 
 
-def _set_col_width(cell, dxa: int):
-    tc   = cell._tc
-    tcPr = tc.get_or_add_tcPr()
-    tcW  = OxmlElement("w:tcW")
-    tcW.set(qn("w:w"), str(dxa)); tcW.set(qn("w:type"), "dxa")
-    tcPr.append(tcW)
-
-
-# ─── Рендер нарратива в DOCX ──────────────────────────────────────
-
 def _render_narrative(doc, narrative: str):
-    """Парсит markdown-подобный нарратив и рендерит его в DOCX."""
     for line in narrative.splitlines():
         line = line.rstrip()
         if not line:
             doc.add_paragraph().paragraph_format.space_after = Pt(2)
             continue
-
         if line.startswith("## "):
             _heading(doc, line[3:], level=1)
         elif line.startswith("### "):
             _heading(doc, line[4:], level=2)
         elif line.startswith("**") and line.endswith("**"):
-            _para(doc, line.strip("*"), bold=True, size=10,
-                  color=COLOR_ACCENT, space_before=6, space_after=2)
+            _para(doc, line.strip("*"), bold=True, size=9,
+                  color=COLOR_ACCENT, space_before=4, space_after=2)
         elif line.startswith("— ") or line.startswith("- "):
             p = doc.add_paragraph(style="List Bullet")
             p.paragraph_format.space_after = Pt(2)
-            run = p.add_run(line[2:])
-            run.font.size = Pt(10)
+            p.add_run(line[2:]).font.size = Pt(9)
+        elif line.startswith("ФАКТЫ:"):
+            _para(doc, line, bold=False, size=9,
+                  color=RGBColor(0x20, 0x40, 0x70), space_before=2, space_after=1)
+        elif line.startswith("ОТКЛОНЕНИЕ:"):
+            _para(doc, line, bold=True, size=9,
+                  color=COLOR_HIGH, space_before=1, space_after=1)
+        elif line.startswith("ИНТЕРПРЕТАЦИЯ:"):
+            _para(doc, line, italic=True, size=9,
+                  color=RGBColor(0x50, 0x50, 0x50), space_before=1, space_after=4)
         else:
-            _para(doc, line, size=10, space_before=0, space_after=4)
+            _para(doc, line, size=9, space_before=0, space_after=3)
 
 
 # ─── Сводная таблица ──────────────────────────────────────────────
 
-def _render_summary_table(doc, results: list[dict]):
+def _render_summary_table(doc, results: list):
     total    = len(results)
     critical = sum(1 for r in results if r.get("risk_level") == "CRITICAL")
     high     = sum(1 for r in results if r.get("risk_level") == "HIGH")
@@ -356,15 +323,15 @@ def _render_summary_table(doc, results: list[dict]):
 
 # ─── Таблица позиций ──────────────────────────────────────────────
 
-def _render_items_table(doc, results: list[dict]):
+def _render_items_table(doc, results: list):
     sorted_r = sorted(results, key=lambda r: r.get("score", 0), reverse=True)
-    widths   = [5200, 1400, 1600, 6200]
+    widths   = [4800, 1200, 1400, 7000]
 
     tbl = doc.add_table(rows=1, cols=4)
     tbl.style = "Table Grid"
 
     hrow  = tbl.rows[0]
-    hhdrs = ["Позиция / Поставщик", "Скор", "Риск", "Аналитическое заключение"]
+    hhdrs = ["Позиция / Поставщик", "Скор", "Уровень", "Факты и отклонения"]
     for i, (cell, hdr, w) in enumerate(zip(hrow.cells, hhdrs, widths)):
         _set_cell_bg(cell, "1F497D"); _set_cell_border(cell, "1F497D"); _set_col_width(cell, w)
         cell.paragraphs[0].clear()
@@ -377,19 +344,15 @@ def _render_items_table(doc, results: list[dict]):
         rl    = result.get("risk_level", "LOW")
         score = result.get("score", 0)
         name  = result.get("item") or result.get("name") or "—"
-        depts = result.get("departments") or []
         conts = result.get("contractors") or []
-        flags = result.get("flags") or []
         tp    = result.get("total_price") or 0
-        up    = result.get("unit_price") or 0
-        qty   = result.get("quantity") or 0
 
         row = tbl.add_row()
         bg  = RISK_BG.get(rl, "FFFFFF") if score >= 20 else ("F8F8F8" if idx % 2 else "FFFFFF")
         for cell, w in zip(row.cells, widths):
             _set_cell_border(cell); _set_cell_bg(cell, bg); _set_col_width(cell, w)
 
-        # Колонка 1: название
+        # Колонка 0: название
         c0 = row.cells[0]
         c0.paragraphs[0].clear()
         r0 = c0.paragraphs[0].add_run(name)
@@ -397,14 +360,12 @@ def _render_items_table(doc, results: list[dict]):
         if tp > 0:
             p2 = c0.add_paragraph()
             p2.paragraph_format.space_before = Pt(1)
-            r2 = p2.add_run(f"Сумма: {tp:,.0f} руб.")
-            r2.font.size = Pt(8); r2.font.color.rgb = RGBColor(0x40, 0x40, 0x40)
+            p2.add_run(f"Сумма: {tp:,.0f} руб.").font.size = Pt(8)
         if conts:
             p3 = c0.add_paragraph()
-            r3 = p3.add_run(conts[0][:50] + ("…" if len(conts[0]) > 50 else ""))
-            r3.font.size = Pt(7.5); r3.font.color.rgb = RGBColor(0x70, 0x70, 0x70)
+            p3.add_run(conts[0][:55] + ("…" if len(conts[0]) > 55 else "")).font.size = Pt(7.5)
 
-        # Колонка 2: скор
+        # Колонка 1: скор
         c1 = row.cells[1]
         c1.paragraphs[0].clear()
         rs = c1.paragraphs[0].add_run(str(score))
@@ -413,7 +374,7 @@ def _render_items_table(doc, results: list[dict]):
         c1.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
         c1.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-        # Колонка 3: уровень риска
+        # Колонка 2: уровень
         c2 = row.cells[2]
         c2.paragraphs[0].clear()
         rr = c2.paragraphs[0].add_run(RISK_LABELS.get(rl, rl))
@@ -422,165 +383,82 @@ def _render_items_table(doc, results: list[dict]):
         c2.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
         c2.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-        # Колонка 4: развёрнутое объяснение
-        c3 = row.cells[3]
+        # Колонка 3: факты и отклонения из full_explanation
+        c3   = row.cells[3]
         c3.paragraphs[0].clear()
+        full = result.get("full_explanation", {})
+        flags_explained = full.get("flags_explained", [])
 
-        # Генерируем развёрнутый текст по флагам
-        explanation_parts = _build_item_explanation(result)
-        first = True
-        for part in explanation_parts:
-            if first:
-                r4 = c3.paragraphs[0].add_run(part)
-                r4.font.size = Pt(8.5)
-                first = False
-            else:
-                p4 = c3.add_paragraph()
-                p4.paragraph_format.space_before = Pt(2)
-                r4 = p4.add_run(part)
-                r4.font.size = Pt(8.5)
+        if flags_explained:
+            first = True
+            for fe in flags_explained:
+                facts  = fe.get("facts", "")
+                dev    = fe.get("deviation", "")
+                interp = fe.get("interpretation", "")
 
+                # ФАКТЫ
+                if facts:
+                    p = c3.paragraphs[0] if first else c3.add_paragraph()
+                    p.paragraph_format.space_before = Pt(0 if first else 4)
+                    rf = p.add_run(f"ФАКТЫ: {facts}")
+                    rf.font.size = Pt(8)
+                    rf.font.color.rgb = RGBColor(0x20, 0x40, 0x70)
+                    first = False
 
-def _build_item_explanation(result: dict) -> list[str]:
-    """Строит список развёрнутых объяснений по флагам позиции."""
-    flags = result.get("flags", [])
-    name  = result.get("item") or result.get("name") or "позиция"
-    score = result.get("score", 0)
-    tp    = result.get("total_price") or 0
-    up    = result.get("unit_price") or 0
-    qty   = result.get("quantity") or 0
-    conts = result.get("contractors") or []
-    depts = result.get("departments") or []
-    ref   = result.get("reference_price") or 0
-    dev   = result.get("deviation_pct") or 0
+                # ОТКЛОНЕНИЕ
+                if dev and dev != "—":
+                    pd = c3.add_paragraph()
+                    pd.paragraph_format.space_before = Pt(1)
+                    rd = pd.add_run(f"ОТКЛОНЕНИЕ: {dev}")
+                    rd.font.size = Pt(8); rd.font.bold = True
+                    rd.font.color.rgb = RISK_COLORS.get(rl, COLOR_MEDIUM)
 
-    parts = []
-
-    # Вводная фраза по уровню риска
-    rl = result.get("risk_level", "LOW")
-    if rl == "CRITICAL":
-        parts.append(f"ВНИМАНИЕ: выявлено несколько критических индикаторов мошенничества.")
-    elif rl == "HIGH":
-        parts.append(f"Позиция демонстрирует признаки финансовых злоупотреблений.")
-
-    flag_map = {
-        "vague_item": (
-            "Наименование позиции сформулировано размыто и не позволяет однозначно "
-            "идентифицировать предмет закупки. Это типичный признак «фиктивных» или "
-            "завышенных позиций, когда размытость формулировки затрудняет проверку."
-        ),
-        "price_deviation_50": (
-            f"Цена единицы ({up:,.0f} руб.) превышает среднюю по группе ({ref:,.0f} руб.) "
-            f"на {dev:.0f}%. Отклонение свыше 50% является признаком возможного завышения "
-            f"стоимости или использования нерыночных расценок."
-        ) if ref > 0 else (
-            f"Зафиксировано критическое отклонение цены (>{50}%) от среднего значения по группе."
-        ),
-        "price_deviation_20": (
-            f"Цена ({up:,.0f} руб.) отклоняется от средней ({ref:,.0f} руб.) на {dev:.0f}%. "
-            f"Требует обоснования актуальным прайс-листом поставщика."
-        ) if ref > 0 else "Зафиксировано отклонение цены на 20-50% от средней по группе.",
-        "total_mismatch": (
-            f"Итоговая сумма не соответствует расчётной ({up:,.0f} × {qty:g} = "
-            f"{up*qty:,.0f} руб. ≠ {tp:,.0f} руб.). Возможна ручная корректировка данных."
-        ) if up > 0 and qty > 0 else (
-            "Итоговая сумма не соответствует произведению цены на количество."
-        ),
-        "contractor_concentration": (
-            f"Все закупки по данной позиции сосредоточены у единственного поставщика"
-            f"{': ' + conts[0] if conts else ''}. "
-            f"Отсутствие конкурентного отбора создаёт условия для сговора и завышения цен."
-        ),
-        "duplicate_3_plus": (
-            f"Идентичная позиция закупается одновременно в {len(depts)} подразделениях "
-            f"({', '.join(depts[:3])}). Высокая вероятность задвоения расходов или "
-            f"фиктивных закупок."
-        ),
-        "duplicate_2": (
-            f"Позиция закупается в двух подразделениях ({', '.join(depts[:2])}). "
-            f"Необходима проверка на обоснованность раздельных закупок."
-        ),
-        "split_suspected": (
-            "Зафиксированы признаки искусственного дробления закупки — множество "
-            "однотипных позиций в одном документе. Возможная цель: обход порога "
-            "обязательного тендера."
-        ),
-        "round_number": (
-            f"Итоговая сумма {tp:,.0f} руб. имеет подозрительно круглое значение. "
-            f"Округлённые суммы без расчётного основания — характерный признак "
-            f"ручного завышения данных."
-        ),
-        "quantity_deviation_50": (
-            "Объём работ расходится более чем на 50% между документами одного периода. "
-            "Возможно двойное выставление счетов за одни и те же работы."
-        ),
-        "quantity_deviation_20": (
-            "Объём работ расходится на 20-50% между документами. "
-            "Рекомендуется сверка с фактически выполненными работами."
-        ),
-        "temporal_clustering": (
-            "Несколько закупок одной позиции совершены в очень короткий срок. "
-            "Признак искусственного создания срочности для обхода согласовательных процедур."
-        ),
-        "contractor_blacklist": (
-            f"Поставщик{' ' + conts[0] if conts else ''} находится в списке подозрительных контрагентов. "
-            f"Все расчёты с данным поставщиком подлежат немедленной проверке."
-        ),
-        "volume_without_price": (
-            "Указан объём работ, однако цена единицы отсутствует. "
-            "Невозможно верифицировать обоснованность итоговой стоимости."
-        ),
-        "zero_quantity": (
-            f"Указана цена {up:,.0f} руб. при нулевом количестве. "
-            f"Возможна попытка провести платёж без документального подтверждения объёма."
-        ),
-    }
-
-    for flag in flags:
-        if flag in flag_map:
-            parts.append(flag_map[flag])
-
-    if not parts:
-        parts.append(result.get("explanation") or "Аномалий не обнаружено.")
-
-    return parts
+                # ИНТЕРПРЕТАЦИЯ
+                if interp:
+                    pi = c3.add_paragraph()
+                    pi.paragraph_format.space_before = Pt(1)
+                    pi.paragraph_format.space_after  = Pt(4)
+                    ri = pi.add_run(f"Возможные причины: {interp.replace('Возможные причины: ', '')}")
+                    ri.font.size = Pt(7.5); ri.italic = True
+                    ri.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
+        else:
+            expl = result.get("explanation", "Отклонений не выявлено")
+            c3.paragraphs[0].add_run(expl).font.size = Pt(8.5)
 
 
 # ─── Основная функция ─────────────────────────────────────────────
 
-def generate_report(results: list[dict], source_files: list[str] = None) -> bytes:
+def generate_report(results: list, source_files: list = None) -> bytes:
     doc = Document()
 
-    # Страница A4
     section = doc.sections[0]
-    section.page_width    = Cm(21);   section.page_height   = Cm(29.7)
-    section.left_margin   = Cm(2.5);  section.right_margin  = Cm(2.0)
-    section.top_margin    = Cm(2.0);  section.bottom_margin = Cm(2.0)
+    section.page_width    = Cm(21);  section.page_height   = Cm(29.7)
+    section.left_margin   = Cm(2.5); section.right_margin  = Cm(2.0)
+    section.top_margin    = Cm(2.0); section.bottom_margin = Cm(2.0)
 
-    now      = datetime.now()
-    date_str = now.strftime("%d.%m.%Y %H:%M")
+    date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
 
     # ── Шапка ──
     _para(doc, "АНАЛИТИЧЕСКИЙ ОТЧЁТ", bold=True, size=18,
           color=COLOR_ACCENT, align=WD_ALIGN_PARAGRAPH.CENTER,
           space_before=0, space_after=2)
-    _para(doc, "Анализ финансовых документов на предмет аномалий и признаков мошенничества",
+    _para(doc, "Автоматический анализ финансовых документов на предмет отклонений",
           size=10, color=RGBColor(0x60, 0x60, 0x60),
           align=WD_ALIGN_PARAGRAPH.CENTER, space_before=0, space_after=2)
-    _para(doc, f"Дата формирования: {date_str}", size=9,
+    _para(doc, f"Сформирован: {date_str}", size=9,
           color=RGBColor(0x80, 0x80, 0x80),
-          align=WD_ALIGN_PARAGRAPH.CENTER, space_before=0, space_after=12)
+          align=WD_ALIGN_PARAGRAPH.CENTER, space_before=0, space_after=10)
 
     # Дисклеймер
     p = doc.add_paragraph()
-    p.paragraph_format.space_after = Pt(14)
+    p.paragraph_format.space_after = Pt(12)
     r = p.add_run(
-        "⚠  Данный отчёт сформирован автоматически. Все выявленные позиции носят характер "
-        "индикаторов и требуют дополнительной проверки. Система не делает окончательных "
-        "выводов о нарушениях."
+        "⚠  Данный отчёт сформирован автоматически на основе статистического анализа данных. "
+        "Все выявленные позиции являются индикаторами и требуют верификации по первичным документам. "
+        "Система не устанавливает факт нарушений и не делает обвинительных выводов."
     )
-    r.font.size = Pt(8.5); r.font.italic = True
-    r.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+    r.font.size = Pt(8.5); r.italic = True
+    r.font.color.rgb = RGBColor(0x70, 0x70, 0x70)
 
     # ── 1. Документы ──
     _heading(doc, "1. Проанализированные документы", level=1)
@@ -597,14 +475,26 @@ def generate_report(results: list[dict], source_files: list[str] = None) -> byte
     _render_summary_table(doc, results)
     doc.add_paragraph()
 
-    # ── 3. AI нарратив ──
+    # Методология скоринга
+    p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(6)
+    r = p.add_run(f"Методология: {SCORE_EXPLANATION}")
+    r.font.size = Pt(8); r.italic = True
+    r.font.color.rgb = RGBColor(0x70, 0x70, 0x70)
+
+    # ── 3. Аналитическое заключение ──
     _heading(doc, "3. Аналитическое заключение", level=1)
     narrative = _generate_narrative(results, source_files or [])
     _render_narrative(doc, narrative)
     doc.add_paragraph()
 
-    # ── 4. Таблица позиций ──
+    # ── 4. Детальный разбор ──
     _heading(doc, "4. Детальный разбор позиций", level=1)
+    _para(doc,
+          "Для каждой позиции указаны: ФАКТЫ (конкретные числа), "
+          "ОТКЛОНЕНИЕ (отклонение от медианы с базой), "
+          "ВОЗМОЖНЫЕ ПРИЧИНЫ (нейтральная интерпретация).",
+          size=8.5, italic=True, color=RGBColor(0x70, 0x70, 0x70), space_after=8)
     _render_items_table(doc, results)
     doc.add_paragraph()
 
@@ -612,8 +502,8 @@ def generate_report(results: list[dict], source_files: list[str] = None) -> byte
     _para(doc, "─" * 55, size=8, color=RGBColor(0xCC, 0xCC, 0xCC),
           space_before=14, space_after=3)
     _para(doc,
-          f"Отчёт сформирован системой анализа финансовых документов. "
-          f"{date_str}. Данные обработаны локально.",
+          f"Отчёт сформирован автоматически. {date_str}. "
+          f"Данные обработаны локально. Требует верификации специалистом.",
           size=7.5, color=RGBColor(0x90, 0x90, 0x90))
 
     buf = io.BytesIO()

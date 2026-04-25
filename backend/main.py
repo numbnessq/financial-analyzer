@@ -1,10 +1,21 @@
+# backend/main.py
 import sys
 import os
+import argparse
 
-# Фикс для PyInstaller — добавляем папку с бинарём в sys.path
-# чтобы "from backend.pipeline.xxx" работало внутри собранного бинаря
 if getattr(sys, 'frozen', False):
     sys.path.insert(0, os.path.dirname(sys.executable))
+
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument("--app-dir", default=None)
+args, _ = parser.parse_known_args()
+
+if args.app_dir:
+    APP_DIR = args.app_dir
+elif getattr(sys, 'frozen', False):
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 import uuid
 import shutil
@@ -12,20 +23,20 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from backend.pipeline.parser import parse_file
-from backend.pipeline.ai_extractor import extract_items
-from backend.pipeline.normalizer import normalize_items
+from backend.pipeline.parser        import parse_file
+from backend.pipeline.ai_extractor  import extract_items
+from backend.pipeline.normalizer    import normalize_items
 from backend.pipeline.source_mapper import attach_source
-from backend.pipeline.matcher import match_across_documents
-from backend.pipeline.analyzer import analyze_all_groups
+from backend.pipeline.matcher       import match_across_documents
+from backend.pipeline.analyzer      import analyze_all_groups
 from backend.pipeline.graph_builder import build_graph_from_aggregated, export_json
 from backend.pipeline.report_generator import generate_report
 
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR = Path(APP_DIR) / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_FILES = 15
 
-app = FastAPI(title="Financial Document Analyzer", version="0.7.0")
+app = FastAPI(title="Financial Document Analyzer", version="0.8.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,11 +45,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_stored_results:   list[dict] = []
-_stored_graph:     dict       = {}
-_stored_analysis:  dict       = {}
-_stored_filenames: list[str]  = []
-_jobs: dict[str, dict]        = {}
+_stored_results:   list  = []
+_stored_graph:     dict  = {}
+_stored_analysis:  dict  = {}
+_stored_filenames: list  = []
+_jobs: dict              = {}
 
 
 @app.get("/ping")
@@ -54,7 +65,7 @@ def upload_files(files: list[UploadFile] = File(...)):
     if not files:
         raise HTTPException(400, "Файлы не переданы")
 
-    saved_files      = []
+    saved_files       = []
     _stored_filenames = []
 
     for file in files:
@@ -63,9 +74,8 @@ def upload_files(files: list[UploadFile] = File(...)):
         with save_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        parsed = parse_file(save_path)
+        parsed       = parse_file(save_path)
         _stored_filenames.append(file.filename)
-
         parsed_items = parsed.get("items", [])
         norm_items   = normalize_items(parsed_items, source=file.filename) if parsed_items else []
 
@@ -82,7 +92,7 @@ def upload_files(files: list[UploadFile] = File(...)):
     return {"uploaded": len(saved_files), "files": saved_files}
 
 
-def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
+def _run_analysis_job(job_id: str, documents: list, filenames: list):
     global _stored_results, _stored_graph, _stored_analysis
 
     try:
@@ -102,12 +112,11 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
                 date = metadata.get("date", "")
 
             existing_items = doc.get("items", [])
-
-            raw_text = doc.get("raw_text", "")
+            raw_text       = doc.get("raw_text", "")
             if not existing_items and raw_text:
-                ai_items = extract_items(raw_text)
-                ai_items = normalize_items(ai_items, source=source_file)
-                ai_items = attach_source(ai_items, source_file)
+                ai_items       = extract_items(raw_text)
+                ai_items       = normalize_items(ai_items, source=source_file)
+                ai_items       = attach_source(ai_items, source_file)
                 existing_items = ai_items
 
             enriched = []
@@ -130,14 +139,14 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
                 "department": dept,
             })
 
-            progress = 10 + int((i + 1) / len(documents) * 50)
+            progress = 10 + int((i + 1) / len(documents) * 40)
             _jobs[job_id] = {
                 "status":   "extracting",
                 "progress": progress,
                 "message":  f"Обработано файлов: {i+1}/{len(documents)}",
             }
 
-        _jobs[job_id] = {"status": "analyzing", "progress": 65, "message": "Анализ аномалий..."}
+        _jobs[job_id] = {"status": "analyzing", "progress": 55, "message": "Анализ аномалий..."}
 
         matched  = match_across_documents(enriched_docs)
         analysis = analyze_all_groups(matched)
@@ -168,14 +177,20 @@ def _run_analysis_job(job_id: str, documents: list[dict], filenames: list[str]):
                 "graph_nodes":       len(graph_json["nodes"]),
                 "graph_edges":       len(graph_json["edges"]),
                 "summary":           analysis.get("summary", ""),
-                "high_risk_count":   sum(1 for r in aggregated if r["score"] >= 70),
-                "medium_risk_count": sum(1 for r in aggregated if 40 <= r["score"] < 70),
+                "high_risk_count":   analysis.get("high_risk_count", 0),
+                "medium_risk_count": analysis.get("medium_risk_count", 0),
+                "has_supplier_risk": (analysis.get("supplier_analysis") or {}).get("has_supplier_risk", False),
+                "pattern_count":     (analysis.get("pattern_analysis") or {}).get("pattern_count", 0),
             },
         }
 
     except Exception as e:
         import traceback
-        _jobs[job_id] = {"status": "error", "progress": 0, "message": str(e) + "\n" + traceback.format_exc()}
+        _jobs[job_id] = {
+            "status":   "error",
+            "progress": 0,
+            "message":  str(e) + "\n" + traceback.format_exc(),
+        }
 
 
 @app.post("/analyze")
@@ -203,10 +218,23 @@ def get_results():
 
 
 @app.get("/graph")
-def get_graph():
+def get_graph(min_score: int = 0, types: str = None):
+    """
+    Параметры фильтрации графа:
+      min_score: минимальный скор для item-узлов (0 = все)
+      types:     через запятую типы узлов, например: item,contractor
+    """
     if not _stored_graph:
         raise HTTPException(404, "Граф не построен. Сначала запусти POST /analyze")
-    return _stored_graph
+
+    if min_score == 0 and not types:
+        return _stored_graph
+
+    # Перестраиваем граф с фильтрами
+    from backend.pipeline.graph_builder import build_graph_from_aggregated
+    G = build_graph_from_aggregated(_stored_results)
+    node_types = [t.strip() for t in types.split(",")] if types else None
+    return export_json(G, min_score=min_score, node_types=node_types)
 
 
 @app.get("/analysis")
@@ -214,6 +242,47 @@ def get_full_analysis():
     if not _stored_analysis:
         raise HTTPException(404, "Анализ не выполнен. Сначала запусти POST /analyze")
     return _stored_analysis
+
+
+@app.get("/suppliers")
+def get_supplier_analysis():
+    """Анализ концентрации поставщиков (HHI, доли, сигналы)."""
+    if not _stored_analysis:
+        raise HTTPException(404, "Анализ не выполнен. Сначала запусти POST /analyze")
+    sa = _stored_analysis.get("supplier_analysis")
+    if not sa:
+        raise HTTPException(404, "Данные поставщиков недоступны")
+    return sa
+
+
+@app.get("/patterns")
+def get_patterns():
+    """Аномальные паттерны: дробление, повторяющиеся суммы, подозрительные интервалы."""
+    if not _stored_analysis:
+        raise HTTPException(404, "Анализ не выполнен. Сначала запусти POST /analyze")
+    pa = _stored_analysis.get("pattern_analysis")
+    if not pa:
+        raise HTTPException(404, "Данные паттернов недоступны")
+    return pa
+
+
+@app.patch("/results/{item_name}/verdict")
+def set_user_verdict(item_name: str, verdict: dict):
+    """
+    Устанавливает user_verdict для позиции.
+    Body: {"verdict": "valid" | "false_positive" | null}
+    """
+    allowed = {"valid", "false_positive", None}
+    v = verdict.get("verdict")
+    if v not in allowed:
+        raise HTTPException(400, f"verdict должен быть одним из: {allowed}")
+
+    for result in _stored_results:
+        if result.get("name") == item_name or result.get("item") == item_name:
+            result["user_verdict"] = v
+            return {"name": item_name, "user_verdict": v}
+
+    raise HTTPException(404, f"Позиция '{item_name}' не найдена")
 
 
 @app.get("/report/save")
@@ -228,7 +297,7 @@ def save_report():
                 results=_stored_results,
                 source_files=_stored_filenames or None,
             )
-            docx_bytes = future.result(timeout=20)
+            docx_bytes = future.result(timeout=30)
     except concurrent.futures.TimeoutError:
         raise HTTPException(504, "Генерация отчёта заняла слишком много времени.")
     except Exception as e:
@@ -254,7 +323,6 @@ def get_report():
         )
     except Exception as e:
         raise HTTPException(500, f"Ошибка генерации отчёта: {e}")
-
     from datetime import datetime
     filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
     return Response(
