@@ -1,9 +1,35 @@
 # Financial Analyzer
 
-Десктоп-приложение для анализа финансовых документов.
-Выявляет аномалии в закупках, строит граф связей, оценивает риски.
+Десктоп-приложение для автоматического анализа финансовых закупочных документов на предмет аномалий и отклонений.
 
-Стек: **Python / FastAPI** (backend) + **Tauri / Rust** (оболочка) + **HTML/JS** (UI)
+> Система выявляет статистические отклонения и структурные несоответствия.  
+> Все результаты носят **индикативный характер** и требуют верификации специалистом.
+
+---
+
+## Стек
+
+| Слой | Технология |
+|------|------------|
+| Desktop | Tauri (Rust) |
+| Backend | Python 3.11 + FastAPI |
+| Frontend | Vanilla JS / HTML |
+| Сборка | PyInstaller + GitHub Actions |
+
+---
+
+## Возможности
+
+- Загрузка документов: **XLSX, DOCX, PDF** (до 15 файлов)
+- Автоматическая нормализация позиций и единиц измерения
+- Fuzzy-матчинг и кластеризация одинаковых позиций между документами
+- **IQR-based ценовой анализ** (Q1/Q3/IQR, soft/hard fence, z-score)
+- Аддитивный скоринг (0–100) с объяснением каждого балла
+- Анализ концентрации поставщиков (индекс Херфиндаля–Хиршмана)
+- Детектор паттернов: дробление закупок, повторяющиеся суммы, подозрительные интервалы
+- Граф закупок: позиции ↔ поставщики ↔ документы
+- Генерация **DOCX-отчёта** с ФАКТЫ / ОТКЛОНЕНИЕ / ИНТЕРПРЕТАЦИЯ по каждой позиции
+- User feedback: разметка false positive через API
 
 ---
 
@@ -12,166 +38,138 @@
 ```
 project/
 ├── backend/
-│   ├── main.py
+│   ├── main.py                  # FastAPI приложение
 │   ├── requirements.txt
-│   ├── models/
 │   └── pipeline/
-│       ├── parser.py
-│       ├── ai_extractor.py
-│       ├── normalizer.py
-│       ├── source_mapper.py
-│       ├── matcher.py
-│       ├── analyzer.py
-│       ├── scorer.py
-│       ├── explainer.py
-│       └── graph_builder.py
+│       ├── parser.py            # Парсинг xlsx/docx/pdf
+│       ├── ai_extractor.py      # Извлечение позиций через AI (fallback)
+│       ├── normalizer.py        # Нормализация полей
+│       ├── source_mapper.py     # Привязка к источнику
+│       ├── matcher.py           # Fuzzy-группировка позиций
+│       ├── clusterer.py         # Кластеризация (Union-Find + rapidfuzz)
+│       ├── analyzer.py          # Оркестратор pipeline
+│       ├── scorer.py            # Флаги + аддитивный скоринг
+│       ├── explainer.py         # ФАКТЫ / ОТКЛОНЕНИЕ / ИНТЕРПРЕТАЦИЯ
+│       ├── price_analyzer.py    # IQR-статистика
+│       ├── supplier_analyzer.py # HHI, доли, сигналы
+│       ├── pattern_detector.py  # Дробление, повторы, интервалы
+│       ├── graph_builder.py     # networkx граф
+│       └── report_generator.py  # DOCX-отчёт
 │
 ├── frontend/
 │   ├── index.html
-│   ├── updater.js
-│   ├── render.js
 │   ├── app.js
 │   ├── api.js
-│   └── graph.js
+│   ├── render.js
+│   ├── graph.js
+│   └── updater.js
 │
 ├── tauri/
 │   ├── package.json
 │   └── src-tauri/
-│       ├── binaries/          ← собранный backend-<triple>
-│       ├── icons/
-│       ├── src/
-│       │   └── main.rs
+│       ├── src/main.rs
 │       ├── Cargo.toml
 │       └── tauri.conf.json
 │
 ├── scripts/
-│   ├── start_backend.py       ← dev-режим
-│   └── build_backend.py       ← сборка бинарника через PyInstaller
+│   ├── start_backend.py         # Dev: запуск frontend + backend
+│   └── build_backend.py         # Сборка PyInstaller бинаря
 │
-├── uploads/                   ← загруженные пользователем файлы
-└── README.md
+└── uploads/                     # Загруженные файлы (dev)
 ```
 
 ---
 
-## Требования
+## Установка и запуск (dev)
 
-- **Python 3.11+**
-- **Rust** — https://rustup.rs
-- **Node.js 20+**
-- **Ollama** с моделью `mistral` — https://ollama.com
+### Требования
 
----
+- Python 3.11+
+- Node.js 20+
+- Rust (stable)
 
-## Установка
+### Первый запуск
 
 ```bash
-python -m venv venv
-source venv/bin/activate        # macOS/Linux
-# venv\Scripts\activate         # Windows
+# 1. Клонировать
+git clone https://github.com/numbnessq/financial-analyzer.git
+cd financial-analyzer
 
+# 2. Python окружение
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r backend/requirements.txt
 
-ollama pull mistral
-ollama serve
-```
-
-Установка зависимостей Tauri:
-
-```bash
+# 3. Node зависимости
 cd tauri
-npm ci
-```
+npm install
 
----
-
-## Запуск (dev)
-
-```bash
-cd tauri
+# 4. Запуск
 npm run tauri dev
 ```
 
-Только backend + браузер:
+---
+
+## Сборка релиза
 
 ```bash
-uvicorn backend.main:app --reload
-# открыть frontend/index.html в браузере
+# Создать тег — GitHub Actions запустит сборку автоматически
+git tag v0.X.X
+git push origin v0.X.X
 ```
+
+Actions соберёт `.dmg` (macOS), `.exe` (Windows), `.AppImage` (Linux) и опубликует в GitHub Releases.
+
+### Secrets для GitHub Actions
+
+| Secret | Описание |
+|--------|----------|
+| `TAURI_PRIVATE_KEY` | Приватный ключ для подписи обновлений |
+| `TAURI_KEY_PASSWORD` | Пароль к ключу |
 
 ---
 
-## Сборка
+## REST API
 
-```bash
-cd tauri
-npm run tauri build
-```
+Backend доступен на `http://127.0.0.1:8000`.
 
-- macOS → `.dmg`
-- Windows → `.msi`
-- Linux → `.AppImage`
-
-Бинарник backend собирается автоматически через `scripts/build_backend.py` (PyInstaller).
-
----
-
-## Релизы (GitHub Actions)
-
-Новый релиз запускается тегом:
-
-```bash
-git tag v0.1.1 && git push origin v0.1.1
-```
-
-CI собирает приложение под macOS, Windows и Linux и публикует assets в GitHub Releases.
-
----
-
-## macOS: ошибка «приложение повреждено»
-
-macOS блокирует неподписанные приложения. После установки выполни:
-
-```bash
-xattr -cr /Applications/financial-analyzer.app
-```
-
----
-
-## Git
-
-```bash
-git add -A && git commit -m "описание" && git push
-```
-
----
-
-## API
-
-| Метод | URL | Описание |
-|---|---|---|
-| GET | `/ping` | Проверка |
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/ping` | Healthcheck |
 | POST | `/upload` | Загрузка файлов |
-| POST | `/analyze` | Запуск анализа |
-| GET | `/results` | Результаты |
-| GET | `/graph` | Граф JSON |
+| POST | `/analyze` | Запуск анализа (async, возвращает job_id) |
+| GET | `/job/{job_id}` | Статус задачи |
+| GET | `/results` | Результаты анализа |
+| GET | `/graph` | Граф (`?min_score=40&types=item,contractor`) |
+| GET | `/suppliers` | Анализ поставщиков (HHI) |
+| GET | `/patterns` | Аномальные паттерны |
+| GET | `/analysis` | Полный объект анализа |
+| PATCH | `/results/{name}/verdict` | User feedback |
+| GET | `/report` | Скачать DOCX-отчёт |
+| GET | `/report/save` | Сохранить отчёт в ~/Downloads |
 
 ---
 
-## Скоринг: `risk = 1 − Π(1 − pᵢ)`
+## Скоринг
 
-| Флаг | p | Что означает |
-|---|---|---|
-| `vague_item` | 0.70 | Размытая формулировка |
-| `duplicate_3_plus` | 0.65 | Позиция в 3+ отделах |
-| `zero_quantity` | 0.65 | Кол-во = 0, цена есть |
-| `total_mismatch` | 0.60 | Сумма ≠ цена × кол-во |
-| `price_deviation_50` | 0.60 | Цена >50% от средней |
-| `quantity_deviation_50` | 0.55 | Объём расходится >50% |
-| `unit_mismatch` | 0.50 | Разные единицы одной позиции |
-| `split_suspected` | 0.45 | Дробление закупки |
+Аддитивная модель: `score = Σ(веса активных флагов)`, максимум 100.
 
-Уровни: **LOW** 0–19 · **MEDIUM** 20–39 · **HIGH** 40–69 · **CRITICAL** 70+
+| Уровень | Диапазон | Значение |
+|---------|----------|----------|
+| CRITICAL | 70–100 | Несколько значимых флагов одновременно |
+| HIGH | 40–69 | Один весомый или несколько слабых флагов |
+| MEDIUM | 20–39 | Один-два слабых сигнала |
+| LOW | 0–19 | Единичный сигнал или отсутствие |
+
+Скор отражает **количество и значимость сигналов**, не вероятность нарушения.
+
+---
+
+## Переменные окружения
+
+| Переменная | Описание |
+|------------|----------|
+| `ANTHROPIC_API_KEY` | Опционально. Если задан — AI генерирует нарратив для отчёта. Без ключа используется детерминированный fallback. |
 
 ---
 
