@@ -1,7 +1,7 @@
 # backend/pipeline/analyzer.py
 """
-Анализатор групп позиций v2.
-Порядок: валидация → кластеризация → скоринг → объяснение
+Анализатор групп позиций v2.1
+Порядок: валидация → кластеризация → скоринг (с контекстом) → объяснение
          → анализ поставщиков → паттерны.
 """
 
@@ -45,13 +45,15 @@ def validate_items(items: list) -> list:
         if total == 0 and up > 0 and qty > 0:
             item["total_price"] = round(up * qty, 2)
             issues.append({
-                "index": i, "name": item.get("name", ""),
+                "index": i,
+                "name":  item.get("name", ""),
                 "issue": f"total_price восстановлен: {item['total_price']:,.2f}",
             })
         if total > 0 and qty > 0 and up == 0:
             item["unit_price"] = round(total / qty, 2)
             issues.append({
-                "index": i, "name": item.get("name", ""),
+                "index": i,
+                "name":  item.get("name", ""),
                 "issue": f"unit_price восстановлен: {item['unit_price']:,.2f}",
             })
     return issues
@@ -77,8 +79,11 @@ def check_group_consistency(items: list) -> list:
 
 def detect_price_anomalies(items: list) -> list:
     import statistics as _st
-    prices = [_to_float(i.get("total_price") or 0) for i in items
-              if _to_float(i.get("total_price") or 0) > 0]
+    prices = [
+        _to_float(i.get("total_price") or 0)
+        for i in items
+        if _to_float(i.get("total_price") or 0) > 0
+    ]
     if len(prices) < 3:
         return []
     median = _st.median(prices)
@@ -87,7 +92,13 @@ def detect_price_anomalies(items: list) -> list:
 
 # ─── Основная функция ─────────────────────────────────────────────
 
-def analyze_all_groups(groups: list) -> dict:
+def analyze_all_groups(groups: list, context_manager=None) -> dict:
+    """
+    Параметры:
+      groups          — список сгруппированных позиций из matcher.py
+      context_manager — опциональный ContextManager для контекстного скоринга.
+                        Если None — используются стандартные веса флагов.
+    """
     # Кластеризация: объединяем похожие группы до анализа
     if _HAS_CLUSTER:
         groups = cluster_groups(groups)
@@ -107,12 +118,25 @@ def analyze_all_groups(groups: list) -> dict:
         consistency_errors = check_group_consistency(items)
         price_anomalies    = detect_price_anomalies(items)
 
-        # Расширенный ценовой анализ
         price_analysis = analyze_group_prices(g) if _HAS_PRICE_ANALYZER else None
 
         representative = items[0]
-        scored         = score_item(representative, g)
-        explained      = explain_result(scored, g)
+
+        # ── Скоринг с контекстом если доступен ───────────────────
+        item_context = None
+        if context_manager is not None:
+            try:
+                from backend.pipeline.scorer import score_item_with_context
+                item_context = context_manager.get_context_for_item(representative, g)
+                scored       = score_item_with_context(
+                    representative, g, item_context=item_context
+                )
+            except Exception:
+                scored = score_item(representative, g)
+        else:
+            scored = score_item(representative, g)
+
+        explained = explain_result(scored, g)
 
         result = {
             **g,
@@ -136,6 +160,9 @@ def analyze_all_groups(groups: list) -> dict:
             "deviation_pct":    explained.get("deviation_pct", 0),
             "departments":      explained.get("departments", g.get("departments", [])),
             "contractors":      explained.get("contractors", g.get("contractors", [])),
+            # Контекстные поля
+            "category":         item_context.category if item_context else "default",
+            "contractor_status":item_context.contractor_status if item_context else "unknown",
             # Расширенный анализ
             "price_analysis":   price_analysis,
             "analysis": {
@@ -143,17 +170,25 @@ def analyze_all_groups(groups: list) -> dict:
                 "price_anomalies":    len(price_anomalies),
                 "has_anomalies":      bool(consistency_errors or price_anomalies),
             },
-            # Поле для user feedback (архитектурно)
             "user_verdict": None,
         }
+
+        # Поля из контекста если есть
+        if item_context is not None:
+            if item_context.historical_ref_price:
+                result["historical_ref_price"] = item_context.historical_ref_price
+                result["historical_n"]         = item_context.historical_n
+            if item_context.market_ref_price:
+                result["market_ref_price"] = item_context.market_ref_price
+
         analyzed.append(result)
         flat.extend(items)
 
-    # Анализ поставщиков по всем позициям
+    # ── Анализ поставщиков ────────────────────────────────────────
     supplier_analysis = analyze_suppliers(flat) if _HAS_SUPPLIER else None
     supplier_changes  = analyze_supplier_changes(analyzed) if _HAS_SUPPLIER else []
 
-    # Паттерны по всем позициям
+    # ── Паттерны ──────────────────────────────────────────────────
     pattern_analysis = detect_all_patterns(flat) if _HAS_PATTERNS else None
 
     high_risk   = sum(1 for r in analyzed if r["score"] >= 70)
